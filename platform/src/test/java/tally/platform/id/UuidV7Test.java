@@ -1,7 +1,9 @@
 package tally.platform.id;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -22,6 +24,17 @@ class UuidV7Test {
     assertThat(first.variant()).isEqualTo(2);
     assertThat(second.version()).isEqualTo(7);
     assertThat(first.toString()).isLessThan(second.toString());
+  }
+
+  @Test
+  void worksWithAClockThatTicksInMicroseconds() {
+    Clock micros = Clock.tick(Clock.systemUTC(), Duration.ofNanos(1000));
+
+    UUID id = UuidV7.next(micros);
+
+    assertThat(id.version()).isEqualTo(7);
+    assertThat(id.getMostSignificantBits() >>> 16)
+        .isCloseTo(micros.instant().toEpochMilli(), within(60_000L));
   }
 
   @Test

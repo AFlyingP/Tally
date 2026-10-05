@@ -12,7 +12,9 @@ public final class UuidV7 {
   private UuidV7() {}
 
   public static UUID next(Clock clock) {
-    long high = (clock.millis() << 16) | 0x7000L | (RANDOM.nextLong() & 0x0FFFL);
+    // Not clock.millis(): on JDK 21 it divides by zero for a clock that ticks below 1 ms.
+    long millis = clock.instant().toEpochMilli();
+    long high = (millis << 16) | 0x7000L | (RANDOM.nextLong() & 0x0FFFL);
     long low = 0x8000000000000000L | (RANDOM.nextLong() & 0x3FFFFFFFFFFFFFFFL);
     return new UUID(high, low);
   }

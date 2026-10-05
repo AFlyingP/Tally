@@ -13,11 +13,12 @@ dependencies {
     pitest(libs.junit.launcher)
 }
 
+val sets = the<SourceSetContainer>()
+
 tasks.register<JavaExec>("pitest") {
     description = "Runs mutation tests on tally.ledger.core."
     group = "verification"
     dependsOn("testClasses")
-    val sets = the<SourceSetContainer>()
     mainClass = "org.pitest.mutationtest.commandline.MutationCoverageReport"
     classpath = pitest
     argumentProviders.add(CommandLineArgumentProvider {
