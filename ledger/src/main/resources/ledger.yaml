@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: ledger
+  datasource:
+    url: ${TALLY_DB_URL:jdbc:postgresql://postgres:5432/tally}
+    username: ${TALLY_DB_USER:ledger_app}
+    password: ${TALLY_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${TALLY_DB_POOL_SIZE:48}
+      connection-timeout: 5000
+  flyway:
+    user: ${TALLY_DB_OWNER_USER:ledger_owner}
+    password: ${TALLY_DB_OWNER_PASSWORD:}
+    locations: classpath:db/ledger
+    default-schema: ledger
+    schemas: ledger
+    create-schemas: false
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+logging:
+  structured:
+    format:
+      console: logstash
+    json:
+      add:
+        service: ledger
+  level:
+    tally: ${LOGGING_LEVEL_TALLY:INFO}
+
+springdoc:
+  api-docs:
+    enabled: false
+
+tally:
+  auth:
+    jwks-uri: ${TALLY_AUTH_JWKS_URI:http://auth:8081/oauth2/jwks}
+    issuer: ${TALLY_AUTH_ISSUER:http://auth:8081}
+  web:
+    large-body-paths: /v1/reconciliation/runs
+  ledger:
+    strategy: ${TALLY_LEDGER_STRATEGY:pessimistic}
+    roles: ${TALLY_LEDGER_ROLES:api,scheduler,orchestrator,relay,expiry,recon,sealer}
+    kafka:
+      bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}
+      topic: ${TALLY_KAFKA_TOPIC:tally.transactions.v1}
+    extbank:
+      url: ${TALLY_EXTBANK_URL:http://extbank:8083}
+      timeout-ms: ${TALLY_EXTBANK_TIMEOUT_MS:2000}
+      api-key: ${EXTBANK_API_KEY:}

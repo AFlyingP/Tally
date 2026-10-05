@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: monitor
+  datasource:
+    url: ${TALLY_DB_URL:jdbc:postgresql://postgres:5432/tally}
+    username: ${TALLY_DB_USER:monitor_app}
+    password: ${TALLY_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${TALLY_DB_POOL_SIZE:8}
+      connection-timeout: 5000
+  flyway:
+    user: ${TALLY_DB_OWNER_USER:${spring.datasource.username}}
+    password: ${TALLY_DB_OWNER_PASSWORD:${spring.datasource.password}}
+    locations: classpath:db/monitor
+    default-schema: monitor
+    schemas: monitor
+    create-schemas: false
+
+server:
+  port: ${SERVER_PORT:8082}
+  shutdown: graceful
+
+logging:
+  structured:
+    format:
+      console: logstash
+    json:
+      add:
+        service: monitor
+  level:
+    tally: ${LOGGING_LEVEL_TALLY:INFO}
+
+tally:
+  auth:
+    jwks-uri: ${TALLY_AUTH_JWKS_URI:http://auth:8081/oauth2/jwks}
+    issuer: ${TALLY_AUTH_ISSUER:http://auth:8081}
+  monitor:
+    kafka:
+      bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}

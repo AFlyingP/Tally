@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: extbank
+  datasource:
+    url: ${TALLY_DB_URL:jdbc:postgresql://postgres:5432/tally}
+    username: ${TALLY_DB_USER:extbank_app}
+    password: ${TALLY_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${TALLY_DB_POOL_SIZE:8}
+      connection-timeout: 5000
+  flyway:
+    user: ${TALLY_DB_OWNER_USER:${spring.datasource.username}}
+    password: ${TALLY_DB_OWNER_PASSWORD:${spring.datasource.password}}
+    locations: classpath:db/extbank
+    default-schema: extbank
+    schemas: extbank
+    create-schemas: false
+
+server:
+  port: ${SERVER_PORT:8083}
+  shutdown: graceful
+
+logging:
+  structured:
+    format:
+      console: logstash
+    json:
+      add:
+        service: extbank
+  level:
+    tally: ${LOGGING_LEVEL_TALLY:INFO}
