@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: auth
+  datasource:
+    url: ${TALLY_DB_URL:jdbc:postgresql://postgres:5432/tally}
+    username: ${TALLY_DB_USER:auth_app}
+    password: ${TALLY_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${TALLY_DB_POOL_SIZE:4}
+      connection-timeout: 5000
+  flyway:
+    user: ${TALLY_DB_OWNER_USER:${spring.datasource.username}}
+    password: ${TALLY_DB_OWNER_PASSWORD:${spring.datasource.password}}
+    locations: classpath:db/auth
+    default-schema: auth
+    schemas: auth
+    create-schemas: false
+
+server:
+  port: ${SERVER_PORT:8081}
+  shutdown: graceful
+
+logging:
+  structured:
+    format:
+      console: logstash
+    json:
+      add:
+        service: auth
+  level:
+    tally: ${LOGGING_LEVEL_TALLY:INFO}
+
+tally:
+  auth:
+    issuer: ${TALLY_AUTH_ISSUER:http://auth:8081}
+    token-ttl-seconds: ${TALLY_TOKEN_TTL_SECONDS:900}
+    key-path: ${TALLY_AUTH_KEY_PATH:/var/lib/tally-auth/signing-key.pem}
+    clients:
+      service-desk:
+        id: ${TALLY_CLIENT_SERVICE_DESK_ID:}
+        secret: ${TALLY_CLIENT_SERVICE_DESK_SECRET:}
+      operator:
+        id: ${TALLY_CLIENT_OPERATOR_ID:}
+        secret: ${TALLY_CLIENT_OPERATOR_SECRET:}
+      admin:
+        id: ${TALLY_CLIENT_ADMIN_ID:}
+        secret: ${TALLY_CLIENT_ADMIN_SECRET:}
+      auditor:
+        id: ${TALLY_CLIENT_AUDITOR_ID:}
+        secret: ${TALLY_CLIENT_AUDITOR_SECRET:}
+      compliance:
+        id: ${TALLY_CLIENT_COMPLIANCE_ID:}
+        secret: ${TALLY_CLIENT_COMPLIANCE_SECRET:}
