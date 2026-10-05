@@ -11,4 +11,5 @@ dependencies {
     testImplementation(testFixtures(project(":platform")))
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.testcontainers.postgresql)
+    testRuntimeOnly(libs.junit.launcher)
 }

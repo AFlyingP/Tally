@@ -12,4 +12,5 @@ dependencies {
     testFixturesImplementation(libs.spring.boot.starter.resource.server)
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.spring.boot.starter.webmvc.test)
+    testRuntimeOnly(libs.junit.launcher)
 }

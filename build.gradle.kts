@@ -29,7 +29,7 @@ subprojects {
     extensions.configure<com.diffplug.gradle.spotless.SpotlessExtension> {
         java {
             target("src/**/*.java")
-            googleJavaFormat("1.37.0")
+            googleJavaFormat("1.36.1")
             removeUnusedImports()
             endWithNewline()
         }

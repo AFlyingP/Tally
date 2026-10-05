@@ -17,4 +17,5 @@ dependencies {
     testImplementation(libs.testcontainers.postgresql)
     testImplementation(libs.testcontainers.kafka)
     testImplementation(libs.awaitility)
+    testRuntimeOnly(libs.junit.launcher)
 }
