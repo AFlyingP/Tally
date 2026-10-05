@@ -37,6 +37,11 @@ case "$target" in
   test) $G test ;;
   e2e)
     $G integrationTest jacocoTestCoverageVerification
+    images
+    $G :proof:proofTest -Pproof.size=ci
+    up
+    trap down EXIT
+    $G :proof:e2eTest
     ;;
   check)
     $G spotlessCheck
