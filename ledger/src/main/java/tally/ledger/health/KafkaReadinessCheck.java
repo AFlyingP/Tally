@@ -36,8 +36,9 @@ public class KafkaReadinessCheck implements ReadinessCheck {
             AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 1000,
             AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 1000);
     // A client per call: a long-lived one keeps reconnecting and logging while the broker is down.
-    AdminClient admin = AdminClient.create(config);
+    AdminClient admin = null;
     try {
+      admin = AdminClient.create(config);
       admin.describeCluster().nodes().get(1000, TimeUnit.MILLISECONDS);
       return true;
     } catch (InterruptedException e) {
@@ -46,7 +47,9 @@ public class KafkaReadinessCheck implements ReadinessCheck {
     } catch (ExecutionException | TimeoutException | KafkaException e) {
       return false;
     } finally {
-      admin.close(Duration.ZERO);
+      if (admin != null) {
+        admin.close(Duration.ZERO);
+      }
     }
   }
 }

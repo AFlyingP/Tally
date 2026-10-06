@@ -29,6 +29,10 @@ class ReadinessChecksIT {
     long start = System.nanoTime();
     assertThat(down.up()).isFalse();
     assertThat((System.nanoTime() - start) / 1_000_000).isLessThan(1500);
+
+    KafkaReadinessCheck unresolvable =
+        new KafkaReadinessCheck(properties("no-such-host.invalid:9092", "http://localhost:1"));
+    assertThat(unresolvable.up()).isFalse();
   }
 
   @Test
