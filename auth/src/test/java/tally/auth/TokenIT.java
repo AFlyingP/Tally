@@ -13,8 +13,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -111,7 +113,8 @@ class TokenIT {
     assertThat(keys.getKeys()).hasSize(1);
     RSAKey key = (RSAKey) keys.getKeyByKeyId(jwt.getHeader().getKeyID());
 
-    assertThat(key.getKeyID()).matches("[0-9a-f]{16}");
+    byte[] digest = MessageDigest.getInstance("SHA-256").digest(key.toRSAPublicKey().getEncoded());
+    assertThat(key.getKeyID()).isEqualTo(HexFormat.of().formatHex(digest).substring(0, 16));
     assertThat(key.getKeyUse().identifier()).isEqualTo("sig");
     assertThat(key.getAlgorithm().getName()).isEqualTo("RS256");
     assertThat(key.isPrivate()).isFalse();

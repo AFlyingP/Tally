@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.kafka.KafkaContainer;
@@ -38,26 +39,30 @@ class ReadinessChecksIT {
   @Test
   void extbankCheckUpAndDown() throws IOException {
     HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+    AtomicInteger status = new AtomicInteger(200);
     server.createContext(
         "/health",
         exchange -> {
-          exchange.sendResponseHeaders(200, -1);
+          exchange.sendResponseHeaders(status.get(), -1);
           exchange.close();
         });
     server.start();
-    int port = server.getAddress().getPort();
+    ExtbankReadinessCheck check =
+        new ExtbankReadinessCheck(
+            properties("localhost:1", "http://localhost:" + server.getAddress().getPort()));
     try {
-      ExtbankReadinessCheck up =
-          new ExtbankReadinessCheck(properties("localhost:1", "http://localhost:" + port));
-      assertThat(up.name()).isEqualTo("extbank");
-      assertThat(up.up()).isTrue();
+      assertThat(check.name()).isEqualTo("extbank");
+      assertThat(check.up()).isTrue();
+
+      status.set(503);
+      assertThat(check.up()).isFalse();
     } finally {
       server.stop(0);
     }
 
-    ExtbankReadinessCheck down =
-        new ExtbankReadinessCheck(properties("localhost:1", "http://localhost:" + port));
-    assertThat(down.up()).isFalse();
+    long start = System.nanoTime();
+    assertThat(check.up()).isFalse();
+    assertThat((System.nanoTime() - start) / 1_000_000).isLessThan(1500);
   }
 
   private static LedgerProperties properties(String bootstrap, String extbankUrl) {

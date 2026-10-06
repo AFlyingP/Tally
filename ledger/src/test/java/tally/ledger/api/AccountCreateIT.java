@@ -35,6 +35,7 @@ class AccountCreateIT extends LedgerIT {
     assertThat(account.get("kind").asString()).isEqualTo("CUSTOMER");
     assertThat(account.get("currency").asString()).isEqualTo("EUR");
     assertThat(account.get("normal_side").asString()).isEqualTo("CREDIT");
+    assertThat(account.get("min_balance").isIntegralNumber()).isTrue();
     assertThat(account.get("min_balance").asLong()).isZero();
     assertThat(account.get("status").asString()).isEqualTo("OPEN");
     assertThat(account.get("created_at").asString())
