@@ -33,6 +33,15 @@ public record AuditEntry(
 
   public AuditEntry withTransaction(UUID id) {
     return new AuditEntry(
-        actor, actorRole, scopes, action, resourceType, resourceId, requestId, outcome, reason, id);
+        actor,
+        actorRole,
+        scopes,
+        action,
+        resourceType,
+        "transaction".equals(resourceType) ? id.toString() : resourceId,
+        requestId,
+        outcome,
+        reason,
+        id);
   }
 }
