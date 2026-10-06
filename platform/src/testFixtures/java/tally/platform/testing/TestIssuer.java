@@ -70,7 +70,7 @@ public final class TestIssuer implements AutoCloseable {
   }
 
   public String token(String clientId, Role role) {
-    return sign(clientId, role.wireName(), String.join(" ", role.scopes()), Instant.now());
+    return sign(clientId, role.wireName(), scopeClaim(role), Instant.now());
   }
 
   public String tokenWithScopes(String clientId, String... scopes) {
@@ -79,13 +79,17 @@ public final class TestIssuer implements AutoCloseable {
 
   public String expiredToken(Role role) {
     Instant issuedAt = Instant.now().minusSeconds(2 * LIFETIME_SECONDS);
-    return sign(
-        "test-" + role.wireName(), role.wireName(), String.join(" ", role.scopes()), issuedAt);
+    return sign("test-" + role.wireName(), role.wireName(), scopeClaim(role), issuedAt);
   }
 
   @Override
   public void close() {
     server.stop(0);
+  }
+
+  // Sorted like the tokens of the auth service.
+  private static String scopeClaim(Role role) {
+    return String.join(" ", role.scopes().stream().sorted().toList());
   }
 
   private String sign(String clientId, String role, String scope, Instant issuedAt) {
