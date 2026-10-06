@@ -1,5 +1,6 @@
 package tally.ledger.store;
 
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -8,10 +9,14 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 import tally.ledger.core.AccountKind;
+import tally.ledger.core.AccountState;
 import tally.ledger.core.AccountStatus;
 import tally.ledger.core.Side;
 import tally.platform.id.UuidV7;
@@ -97,6 +102,67 @@ public class AccountStore {
                 row.getLong("version"),
                 row.getObject("created_at", OffsetDateTime.class).toInstant()));
       }
+    }
+  }
+
+  public Map<UUID, AccountState> load(
+      Connection connection, Collection<UUID> ids, boolean forUpdate) throws SQLException {
+    String sql =
+        """
+        SELECT id, kind, currency, normal_side, min_balance, status, balance, held, version
+        FROM ledger.account WHERE id = ANY(?) ORDER BY id
+        """
+            .stripTrailing();
+    if (forUpdate) {
+      sql += " FOR UPDATE";
+    }
+    Array accountIds = connection.createArrayOf("uuid", ids.toArray(UUID[]::new));
+    try (PreparedStatement select = connection.prepareStatement(sql)) {
+      select.setArray(1, accountIds);
+      Map<UUID, AccountState> accounts = new LinkedHashMap<>();
+      try (ResultSet rows = select.executeQuery()) {
+        while (rows.next()) {
+          AccountState account =
+              new AccountState(
+                  rows.getObject("id", UUID.class),
+                  AccountKind.valueOf(rows.getString("kind")),
+                  rows.getString("currency"),
+                  Side.valueOf(rows.getString("normal_side")),
+                  rows.getObject("min_balance", Long.class),
+                  AccountStatus.valueOf(rows.getString("status")),
+                  rows.getLong("balance"),
+                  rows.getLong("held"),
+                  rows.getLong("version"));
+          accounts.put(account.id(), account);
+        }
+      }
+      return accounts;
+    } finally {
+      accountIds.free();
+    }
+  }
+
+  public int update(
+      Connection connection, UUID id, long balance, long held, Instant now, Long expectedVersion)
+      throws SQLException {
+    String sql =
+        """
+        UPDATE ledger.account SET balance = ?, held = ?, version = version + 1, updated_at = ?
+        WHERE id = ?
+        """
+            .stripTrailing();
+    if (expectedVersion != null) {
+      sql += " AND version = ?";
+    }
+    try (PreparedStatement update = connection.prepareStatement(sql)) {
+      update.setLong(1, balance);
+      update.setLong(2, held);
+      update.setObject(3, now.atOffset(ZoneOffset.UTC));
+      update.setObject(4, id);
+      if (expectedVersion != null) {
+        update.setLong(5, expectedVersion);
+      }
+      return update.executeUpdate();
     }
   }
 

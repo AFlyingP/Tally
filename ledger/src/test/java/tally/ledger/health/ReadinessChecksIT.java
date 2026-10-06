@@ -70,6 +70,8 @@ class ReadinessChecksIT {
         "pessimistic",
         Set.of("relay", "orchestrator"),
         new LedgerProperties.Kafka(bootstrap, "tally.transactions.v1"),
-        new LedgerProperties.Extbank(extbankUrl, 2000, "test-api-key"));
+        new LedgerProperties.Extbank(extbankUrl, 2000, "test-api-key"),
+        new LedgerProperties.Retry(10, 1, 200),
+        10000);
   }
 }

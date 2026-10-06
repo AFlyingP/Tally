@@ -43,6 +43,11 @@ tally:
   ledger:
     strategy: ${TALLY_LEDGER_STRATEGY:pessimistic}
     roles: ${TALLY_LEDGER_ROLES:api,scheduler,orchestrator,relay,expiry,recon,sealer}
+    retry:
+      max-attempts: ${TALLY_RETRY_MAX_ATTEMPTS:10}
+      base-ms: ${TALLY_RETRY_BASE_MS:1}
+      cap-ms: ${TALLY_RETRY_CAP_MS:200}
+    lock-wait-ms: ${TALLY_LOCK_WAIT_MS:10000}
     kafka:
       bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}
       topic: ${TALLY_KAFKA_TOPIC:tally.transactions.v1}

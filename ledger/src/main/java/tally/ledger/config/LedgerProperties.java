@@ -5,7 +5,13 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /** The tally.ledger.* settings, checked once at startup. */
 @ConfigurationProperties("tally.ledger")
-public record LedgerProperties(String strategy, Set<String> roles, Kafka kafka, Extbank extbank) {
+public record LedgerProperties(
+    String strategy,
+    Set<String> roles,
+    Kafka kafka,
+    Extbank extbank,
+    Retry retry,
+    long lockWaitMs) {
 
   public static final Set<String> KNOWN_ROLES =
       Set.of("api", "scheduler", "orchestrator", "relay", "expiry", "recon", "sealer");
@@ -14,9 +20,27 @@ public record LedgerProperties(String strategy, Set<String> roles, Kafka kafka, 
 
   public record Extbank(String url, long timeoutMs, String apiKey) {}
 
+  public record Retry(int maxAttempts, long baseMs, long capMs) {
+
+    public Retry {
+      if (maxAttempts < 1 || maxAttempts > 50) {
+        throw invalid("tally.ledger.retry.max-attempts", "must be between 1 and 50");
+      }
+      if (baseMs < 1 || baseMs > 1000) {
+        throw invalid("tally.ledger.retry.base-ms", "must be between 1 and 1000");
+      }
+      if (capMs < 1 || capMs > 10000) {
+        throw invalid("tally.ledger.retry.cap-ms", "must be between 1 and 10000");
+      }
+    }
+  }
+
   public LedgerProperties {
     if (strategy == null || strategy.isBlank()) {
       throw invalid("tally.ledger.strategy", "must not be empty");
+    }
+    if (lockWaitMs < 100 || lockWaitMs > 60000) {
+      throw invalid("tally.ledger.lock-wait-ms", "must be between 100 and 60000");
     }
     if (roles == null || roles.isEmpty()) {
       throw invalid("tally.ledger.roles", "at least one role is required");
