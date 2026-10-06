@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "transaction-posted.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "schema_version", "type", "transaction_id", "kind", "currency", "amount",
+               "posted_at", "key_account_id", "request_id", "reverses_transaction_id", "entries"],
+  "properties": {
+    "event_id": {"type": "string", "format": "uuid"},
+    "schema_version": {"const": 1},
+    "type": {"const": "transaction.posted"},
+    "transaction_id": {"type": "string", "format": "uuid"},
+    "kind": {"enum": ["DEPOSIT", "WITHDRAWAL", "TRANSFER", "REVERSAL", "HOLD_CAPTURE",
+                      "EXTERNAL_SETTLEMENT", "EXTERNAL_COMPENSATION"]},
+    "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "amount": {"type": "integer", "minimum": 1},
+    "posted_at": {"type": "string", "format": "date-time"},
+    "key_account_id": {"type": "string", "format": "uuid"},
+    "request_id": {"type": "string"},
+    "reverses_transaction_id": {"type": ["string", "null"], "format": "uuid"},
+    "entries": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account_id", "account_kind", "normal_side", "side", "amount"],
+        "properties": {
+          "account_id": {"type": "string", "format": "uuid"},
+          "account_kind": {"enum": ["CUSTOMER", "SETTLEMENT", "CLEARING"]},
+          "normal_side": {"enum": ["DEBIT", "CREDIT"]},
+          "side": {"enum": ["DEBIT", "CREDIT"]},
+          "amount": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}
