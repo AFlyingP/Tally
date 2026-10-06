@@ -27,6 +27,7 @@ tasks.register<JavaExec>("pitest") {
             "--targetClasses", "tally.ledger.core.*",
             "--targetTests", "tally.ledger.core.*Test",
             "--sourceDirs", file("src/main/java").path,
+            "--mutableCodePaths", sets["main"].output.classesDirs.files.joinToString(","),
             "--classPath", (sets["test"].runtimeClasspath.files).joinToString(","),
             "--outputFormats", "XML,HTML",
             "--timestampedReports", "false",
