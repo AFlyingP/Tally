@@ -192,6 +192,51 @@ class AccountCreateIT extends LedgerIT {
     }
   }
 
+  @Test
+  void rollsBackTheAccountWhenTheAuditRowFails() throws Exception {
+    try (Connection superuser = superJdbc();
+        Statement statement = superuser.createStatement()) {
+      statement.execute(
+          """
+          CREATE FUNCTION ledger.fail_marked_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            IF NEW.request_id = 'test-req-fail-0001' THEN
+              RAISE EXCEPTION 'audit insert refused by the test';
+            END IF;
+            RETURN NEW;
+          END $$;
+          CREATE TRIGGER fail_marked_audit BEFORE INSERT ON ledger.audit_log
+            FOR EACH ROW EXECUTE FUNCTION ledger.fail_marked_audit();
+          """);
+      try {
+        HttpResponse<String> response =
+            post(
+                "/v1/accounts",
+                token(Role.OPERATOR),
+                "{\"currency\":\"JPY\"}",
+                "X-Request-Id",
+                "test-req-fail-0001");
+        assertThat(response.statusCode()).isEqualTo(503);
+
+        try (ResultSet accounts =
+            statement.executeQuery("SELECT count(*) FROM ledger.account WHERE currency = 'JPY'")) {
+          accounts.next();
+          assertThat(accounts.getInt(1)).isZero();
+        }
+        try (ResultSet audit =
+            statement.executeQuery(
+                "SELECT count(*) FROM ledger.audit_log WHERE request_id = 'test-req-fail-0001'")) {
+          audit.next();
+          assertThat(audit.getInt(1)).isZero();
+        }
+      } finally {
+        statement.execute(
+            "DROP TRIGGER fail_marked_audit ON ledger.audit_log;"
+                + " DROP FUNCTION ledger.fail_marked_audit()");
+      }
+    }
+  }
+
   private HttpResponse<String> create(String json) {
     return post("/v1/accounts", token(Role.OPERATOR), json);
   }
