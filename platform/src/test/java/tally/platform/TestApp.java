@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import tally.platform.error.ApiException;
 import tally.platform.error.ErrorCode;
+import tally.platform.security.Role;
 import tally.platform.testing.TestIssuer;
 
 @SpringBootApplication(exclude = DataSourceAutoConfiguration.class)
@@ -26,6 +27,8 @@ public class TestApp {
   }
 
   public record Echo(long amount, Instant at) {}
+
+  public record Pick(Role role) {}
 
   @RestController
   static class Endpoints {
@@ -44,6 +47,11 @@ public class TestApp {
     @PostMapping("/t/echo")
     Echo echo(@RequestBody Echo echo) {
       return echo;
+    }
+
+    @PostMapping("/t/pick")
+    Pick pick(@RequestBody Pick pick) {
+      return pick;
     }
 
     @GetMapping("/t/fail/{code}")

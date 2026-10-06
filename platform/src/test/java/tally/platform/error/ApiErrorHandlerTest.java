@@ -77,6 +77,17 @@ class ApiErrorHandlerTest {
   }
 
   @Test
+  void rejectsNumberForEnumAsMalformed() throws Exception {
+    mvc.perform(
+            post("/t/pick")
+                .header(HttpHeaders.AUTHORIZATION, bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"role\":0}"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("MALFORMED_REQUEST"));
+  }
+
+  @Test
   void writesTimestampsWithSixFractionDigits() throws Exception {
     echo("{\"amount\":1,\"at\":\"2026-01-05T10:00:00Z\"}")
         .andExpect(status().isOk())

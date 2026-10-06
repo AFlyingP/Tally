@@ -18,6 +18,7 @@ import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.SerializationContext;
 import tools.jackson.databind.cfg.CoercionAction;
 import tools.jackson.databind.cfg.CoercionInputShape;
+import tools.jackson.databind.cfg.EnumFeature;
 import tools.jackson.databind.deser.std.StdDeserializer;
 import tools.jackson.databind.module.SimpleModule;
 import tools.jackson.databind.ser.std.StdSerializer;
@@ -40,6 +41,7 @@ public class JsonConfig {
             .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
             .disable(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
             .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS)
+            .enable(EnumFeature.FAIL_ON_NUMBERS_FOR_ENUMS)
             .withCoercionConfig(
                 LogicalType.Integer,
                 config ->
