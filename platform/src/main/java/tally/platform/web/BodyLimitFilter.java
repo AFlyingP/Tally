@@ -7,7 +7,11 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
@@ -80,6 +84,13 @@ public class BodyLimitFilter extends OncePerRequestFilter {
     @Override
     public ServletInputStream getInputStream() throws IOException {
       return new LimitedStream(super.getInputStream(), limit);
+    }
+
+    @Override
+    public BufferedReader getReader() throws IOException {
+      String encoding = getCharacterEncoding();
+      Charset charset = encoding == null ? StandardCharsets.UTF_8 : Charset.forName(encoding);
+      return new BufferedReader(new InputStreamReader(getInputStream(), charset));
     }
   }
 

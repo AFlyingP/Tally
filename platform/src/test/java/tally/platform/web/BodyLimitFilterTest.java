@@ -7,6 +7,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import jakarta.servlet.FilterChain;
+import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +26,7 @@ import tally.platform.error.ApiErrorHandler;
 import tally.platform.error.ApiException;
 import tally.platform.error.ErrorCode;
 import tally.platform.security.Role;
+import tools.jackson.databind.json.JsonMapper;
 
 @SpringBootTest(classes = TestApp.class)
 @AutoConfigureMockMvc
@@ -31,6 +34,7 @@ class BodyLimitFilterTest {
 
   @Autowired MockMvc mvc;
   @Autowired ApiErrorHandler errors;
+  @Autowired JsonMapper json;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -63,6 +67,34 @@ class BodyLimitFilterTest {
     MockHttpServletResponse accepted = new MockHttpServletResponse();
     filter.doFilter(streamed("/big", 1025), accepted, readsBody);
     assertThat(accepted.getStatus()).isEqualTo(200);
+  }
+
+  @Test
+  void limitSurvivesJsonParsingOfAStreamedBody() throws Exception {
+    BodyLimitFilter filter = new BodyLimitFilter(errors, 1024, Set.of(), 4096);
+    FilterChain parsesBody =
+        (request, response) -> json.readValue(request.getInputStream(), TestApp.Echo.class);
+    MockHttpServletRequest request = streamed("/t/echo", 0);
+    request.setContent(
+        ("{\"amount\":1,\"at\":\"" + "x".repeat(2000) + "\"}").getBytes(StandardCharsets.UTF_8));
+
+    assertThatThrownBy(() -> filter.doFilter(request, new MockHttpServletResponse(), parsesBody))
+        .isInstanceOfSatisfying(
+            ApiException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.PAYLOAD_TOO_LARGE));
+  }
+
+  @Test
+  void limitAppliesToTheReaderOfAStreamedBody() {
+    BodyLimitFilter filter = new BodyLimitFilter(errors, 1024, Set.of(), 4096);
+    FilterChain readsText =
+        (request, response) -> request.getReader().transferTo(new StringWriter());
+
+    assertThatThrownBy(
+            () ->
+                filter.doFilter(
+                    streamed("/t/echo", 1025), new MockHttpServletResponse(), readsText))
+        .isInstanceOfSatisfying(
+            ApiException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.PAYLOAD_TOO_LARGE));
   }
 
   @Test
