@@ -72,6 +72,7 @@ class ReadinessChecksIT {
         new LedgerProperties.Kafka(bootstrap, "tally.transactions.v1"),
         new LedgerProperties.Extbank(extbankUrl, 2000, "test-api-key"),
         new LedgerProperties.Retry(10, 1, 200),
+        new LedgerProperties.Idempotency(5000),
         10000);
   }
 }

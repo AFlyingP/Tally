@@ -47,6 +47,8 @@ tally:
       max-attempts: ${TALLY_RETRY_MAX_ATTEMPTS:10}
       base-ms: ${TALLY_RETRY_BASE_MS:1}
       cap-ms: ${TALLY_RETRY_CAP_MS:200}
+    idempotency:
+      wait-ms: ${TALLY_IDEMPOTENCY_WAIT_MS:5000}
     lock-wait-ms: ${TALLY_LOCK_WAIT_MS:10000}
     kafka:
       bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}

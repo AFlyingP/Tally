@@ -91,6 +91,37 @@ class DatabaseEnforcementIT extends LedgerIT {
   }
 
   @Test
+  void entriesInsideSavepointOfCreatingTransactionAreAccepted() throws SQLException {
+    for (int isolation : ISOLATIONS) {
+      Rows rows;
+      try (Connection db = appJdbc()) {
+        db.setTransactionIsolation(isolation);
+        db.setAutoCommit(false);
+        rows = insertRows(db, "USD");
+        db.setSavepoint();
+        insertTransaction(db, rows.transactionId(), rows.keyId(), rows.clientId(), "USD");
+        insertEntry(db, rows.transactionId(), rows.debitAccount(), "USD", "DEBIT", 100);
+        insertEntry(db, rows.transactionId(), rows.creditAccount(), "USD", "CREDIT", 100);
+        db.commit();
+      }
+      try (Connection db = appJdbc()) {
+        assertThat(
+                count(
+                    db,
+                    "SELECT count(*) FROM ledger.ledger_transaction WHERE id = ? AND amount = 100",
+                    rows.transactionId()))
+            .isEqualTo(1);
+        assertThat(
+                count(
+                    db,
+                    "SELECT count(*) FROM ledger.entry WHERE transaction_id = ? AND amount = 100",
+                    rows.transactionId()))
+            .isEqualTo(2);
+      }
+    }
+  }
+
+  @Test
   void entryCurrencyMustMatchTransaction() throws SQLException {
     Rows rows;
     try (Connection db = appJdbc()) {

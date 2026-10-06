@@ -11,6 +11,7 @@ public record LedgerProperties(
     Kafka kafka,
     Extbank extbank,
     Retry retry,
+    Idempotency idempotency,
     long lockWaitMs) {
 
   public static final Set<String> KNOWN_ROLES =
@@ -19,6 +20,15 @@ public record LedgerProperties(
   public record Kafka(String bootstrap, String topic) {}
 
   public record Extbank(String url, long timeoutMs, String apiKey) {}
+
+  public record Idempotency(long waitMs) {
+
+    public Idempotency {
+      if (waitMs < 100 || waitMs > 60000) {
+        throw invalid("tally.ledger.idempotency.wait-ms", "must be between 100 and 60000");
+      }
+    }
+  }
 
   public record Retry(int maxAttempts, long baseMs, long capMs) {
 
