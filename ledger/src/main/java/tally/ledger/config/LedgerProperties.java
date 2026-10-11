@@ -46,9 +46,6 @@ public record LedgerProperties(
   }
 
   public LedgerProperties {
-    if (strategy == null || strategy.isBlank()) {
-      throw invalid("tally.ledger.strategy", "must not be empty");
-    }
     if (lockWaitMs < 100 || lockWaitMs > 60000) {
       throw invalid("tally.ledger.lock-wait-ms", "must be between 100 and 60000");
     }

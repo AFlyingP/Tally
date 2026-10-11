@@ -22,11 +22,6 @@ public class StrategyRunner {
   private final SplittableRandom random = new SplittableRandom();
 
   public StrategyRunner(PostingStrategy strategy, LedgerProperties properties) {
-    if (!strategy.name().equals(properties.strategy())) {
-      throw new IllegalArgumentException(
-          "invalid configuration: tally.ledger.strategy: unknown strategy "
-              + properties.strategy());
-    }
     this.strategy = strategy;
     this.retry = properties.retry();
   }
