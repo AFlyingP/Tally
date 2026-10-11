@@ -4,10 +4,13 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Currency;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import javax.sql.DataSource;
@@ -16,7 +19,12 @@ import tally.ledger.api.AccountDto;
 import tally.ledger.api.Cursor;
 import tally.ledger.audit.AuditEntry;
 import tally.ledger.audit.AuditWriter;
+import tally.ledger.core.AccountKind;
+import tally.ledger.core.AccountState;
+import tally.ledger.core.AccountStatus;
 import tally.ledger.core.Side;
+import tally.ledger.posting.RetryableConflict;
+import tally.ledger.posting.StrategyRunner;
 import tally.ledger.store.AccountStore;
 import tally.ledger.store.EntryStore;
 import tally.platform.error.ApiError;
@@ -39,18 +47,21 @@ public class AccountService {
   private final EntryStore entries;
   private final AuditWriter audit;
   private final Clock clock;
+  private final StrategyRunner runner;
 
   public AccountService(
       DataSource dataSource,
       AccountStore accounts,
       EntryStore entries,
       AuditWriter audit,
-      Clock clock) {
+      Clock clock,
+      StrategyRunner runner) {
     this.dataSource = dataSource;
     this.accounts = accounts;
     this.entries = entries;
     this.audit = audit;
     this.clock = clock;
+    this.runner = runner;
   }
 
   /** Creates a customer account, the internal accounts of its currency, and the audit row. */
@@ -106,6 +117,64 @@ public class AccountService {
           row.status(),
           row.createdAt());
     }
+  }
+
+  public AccountDto.Account freeze(Caller caller, UUID id, String requestId) {
+    return changeStatus(caller, id, requestId, AccountStatus.FROZEN);
+  }
+
+  public AccountDto.Account close(Caller caller, UUID id, String requestId) {
+    return changeStatus(caller, id, requestId, AccountStatus.CLOSED);
+  }
+
+  private AccountDto.Account changeStatus(
+      Caller caller, UUID id, String requestId, AccountStatus newStatus) {
+    String action = newStatus == AccountStatus.FROZEN ? "account.freeze" : "account.close";
+    return runner
+        .execute(
+            tx -> {
+              Map<UUID, AccountState> loaded = tx.accounts(new TreeSet<>(Set.of(id)));
+              AccountState account = loaded.get(id);
+              if (account == null) {
+                throw new ApiException(ErrorCode.NOT_FOUND, "account not found");
+              }
+              if (account.kind() != AccountKind.CUSTOMER) {
+                throw new ApiException(ErrorCode.INTERNAL_ACCOUNT, "account is not a customer");
+              }
+              if (newStatus == AccountStatus.FROZEN) {
+                if (account.status() == AccountStatus.FROZEN) {
+                  throw new ApiException(ErrorCode.ACCOUNT_FROZEN, "account is frozen");
+                }
+                if (account.status() == AccountStatus.CLOSED) {
+                  throw new ApiException(ErrorCode.ACCOUNT_CLOSED, "account is closed");
+                }
+              } else {
+                if (account.status() == AccountStatus.CLOSED) {
+                  throw new ApiException(ErrorCode.ACCOUNT_CLOSED, "account is closed");
+                }
+                if (account.balance() != 0 || account.held() != 0) {
+                  throw new ApiException(ErrorCode.ACCOUNT_NOT_EMPTY, "account is not empty");
+                }
+              }
+              Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+              if (accounts.updateStatus(tx.connection(), id, newStatus, account.version(), now)
+                  == 0) {
+                throw new RetryableConflict("version");
+              }
+              audit.record(
+                  tx.connection(),
+                  AuditEntry.success(caller, action, "account", id.toString(), requestId));
+              AccountStore.AccountRow row = accounts.find(tx.connection(), id).orElseThrow();
+              return new AccountDto.Account(
+                  row.id(),
+                  row.kind(),
+                  row.currency(),
+                  row.normalSide(),
+                  row.minBalance(),
+                  row.status(),
+                  row.createdAt());
+            })
+        .value();
   }
 
   public AccountDto.Balance balance(UUID id, Instant asOfOrNull) throws SQLException {

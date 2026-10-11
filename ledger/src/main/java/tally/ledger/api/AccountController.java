@@ -36,6 +36,18 @@ public class AccountController {
     return accounts.create(Caller.from(jwt), request, RequestIdFilter.current());
   }
 
+  @PostMapping("/v1/accounts/{id}/freeze")
+  @PreAuthorize("hasAuthority('SCOPE_accounts:admin')")
+  AccountDto.Account freeze(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    return accounts.freeze(Caller.from(jwt), id, RequestIdFilter.current());
+  }
+
+  @PostMapping("/v1/accounts/{id}/close")
+  @PreAuthorize("hasAuthority('SCOPE_accounts:admin')")
+  AccountDto.Account close(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
+    return accounts.close(Caller.from(jwt), id, RequestIdFilter.current());
+  }
+
   @GetMapping("/v1/accounts/{id}")
   @PreAuthorize("hasAuthority('SCOPE_accounts:read')")
   AccountDto.Account get(@PathVariable UUID id) throws SQLException {

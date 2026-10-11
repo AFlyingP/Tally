@@ -166,6 +166,23 @@ public class AccountStore {
     }
   }
 
+  public int updateStatus(
+      Connection connection, UUID id, AccountStatus status, long expectedVersion, Instant now)
+      throws SQLException {
+    String sql =
+        """
+        UPDATE ledger.account SET status = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND version = ?
+        """;
+    try (PreparedStatement update = connection.prepareStatement(sql)) {
+      update.setString(1, status.name());
+      update.setObject(2, now.atOffset(ZoneOffset.UTC));
+      update.setObject(3, id);
+      update.setLong(4, expectedVersion);
+      return update.executeUpdate();
+    }
+  }
+
   private static void bind(
       PreparedStatement insert,
       UUID id,
