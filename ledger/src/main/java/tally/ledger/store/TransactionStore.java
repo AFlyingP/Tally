@@ -10,9 +10,12 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
+import tally.ledger.api.TransactionDto;
 import tally.ledger.core.EntryLine;
+import tally.ledger.core.Side;
 import tally.ledger.core.TransactionKind;
 
 /** SQL for transactions and entries. Every method runs on the caller's connection. */
@@ -85,6 +88,84 @@ public class TransactionStore {
         }
       }
       return ids;
+    }
+  }
+
+  public Optional<TransactionDto.Transaction> find(Connection connection, UUID id)
+      throws SQLException {
+    String transactionSql =
+        """
+        SELECT id, kind, currency, amount, description, posted_at, reverses_id
+        FROM ledger.ledger_transaction WHERE id = ?
+        """;
+    UUID transactionId;
+    TransactionKind kind;
+    String currency;
+    long amount;
+    String description;
+    Instant postedAt;
+    UUID reversesId;
+    try (PreparedStatement select = connection.prepareStatement(transactionSql)) {
+      select.setObject(1, id);
+      try (ResultSet row = select.executeQuery()) {
+        if (!row.next()) {
+          return Optional.empty();
+        }
+        transactionId = row.getObject("id", UUID.class);
+        kind = TransactionKind.valueOf(row.getString("kind"));
+        currency = row.getString("currency");
+        amount = row.getLong("amount");
+        description = row.getString("description");
+        postedAt = row.getObject("posted_at", OffsetDateTime.class).toInstant();
+        reversesId = row.getObject("reverses_id", UUID.class);
+      }
+    }
+    List<TransactionDto.Entry> entries = findEntries(connection, transactionId);
+    UUID reversedById = findReversedBy(connection, transactionId);
+    return Optional.of(
+        new TransactionDto.Transaction(
+            transactionId,
+            kind,
+            currency,
+            amount,
+            description,
+            postedAt,
+            reversesId,
+            reversedById,
+            entries));
+  }
+
+  private static List<TransactionDto.Entry> findEntries(Connection connection, UUID id)
+      throws SQLException {
+    String sql =
+        """
+        SELECT id, account_id, side, amount FROM ledger.entry
+        WHERE transaction_id = ? ORDER BY id
+        """;
+    try (PreparedStatement select = connection.prepareStatement(sql)) {
+      select.setObject(1, id);
+      try (ResultSet rows = select.executeQuery()) {
+        List<TransactionDto.Entry> entries = new ArrayList<>();
+        while (rows.next()) {
+          entries.add(
+              new TransactionDto.Entry(
+                  rows.getLong("id"),
+                  rows.getObject("account_id", UUID.class),
+                  Side.valueOf(rows.getString("side")),
+                  rows.getLong("amount")));
+        }
+        return entries;
+      }
+    }
+  }
+
+  private static UUID findReversedBy(Connection connection, UUID id) throws SQLException {
+    String sql = "SELECT id FROM ledger.ledger_transaction WHERE reverses_id = ?";
+    try (PreparedStatement select = connection.prepareStatement(sql)) {
+      select.setObject(1, id);
+      try (ResultSet row = select.executeQuery()) {
+        return row.next() ? row.getObject("id", UUID.class) : null;
+      }
     }
   }
 }
