@@ -6,16 +6,19 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.springframework.stereotype.Service;
 import tally.ledger.api.AccountDto;
+import tally.ledger.api.Cursor;
 import tally.ledger.audit.AuditEntry;
 import tally.ledger.audit.AuditWriter;
 import tally.ledger.core.Side;
 import tally.ledger.store.AccountStore;
+import tally.ledger.store.EntryStore;
 import tally.platform.error.ApiError;
 import tally.platform.error.ApiException;
 import tally.platform.error.ErrorCode;
@@ -33,13 +36,19 @@ public class AccountService {
 
   private final DataSource dataSource;
   private final AccountStore accounts;
+  private final EntryStore entries;
   private final AuditWriter audit;
   private final Clock clock;
 
   public AccountService(
-      DataSource dataSource, AccountStore accounts, AuditWriter audit, Clock clock) {
+      DataSource dataSource,
+      AccountStore accounts,
+      EntryStore entries,
+      AuditWriter audit,
+      Clock clock) {
     this.dataSource = dataSource;
     this.accounts = accounts;
+    this.entries = entries;
     this.audit = audit;
     this.clock = clock;
   }
@@ -81,6 +90,73 @@ public class AccountService {
         throw e;
       }
     }
+  }
+
+  public AccountDto.Account get(UUID id) throws SQLException {
+    try (Connection connection = dataSource.getConnection()) {
+      connection.setReadOnly(true);
+      connection.setAutoCommit(true);
+      AccountStore.AccountRow row = findAccount(connection, id);
+      return new AccountDto.Account(
+          row.id(),
+          row.kind(),
+          row.currency(),
+          row.normalSide(),
+          row.minBalance(),
+          row.status(),
+          row.createdAt());
+    }
+  }
+
+  public AccountDto.Balance balance(UUID id, Instant asOfOrNull) throws SQLException {
+    try (Connection connection = dataSource.getConnection()) {
+      connection.setReadOnly(true);
+      connection.setAutoCommit(true);
+      AccountStore.AccountRow row = findAccount(connection, id);
+      if (asOfOrNull == null) {
+        return new AccountDto.Balance(
+            row.id(),
+            row.currency(),
+            row.balance(),
+            row.held(),
+            row.balance() - row.held(),
+            clock.instant());
+      }
+      if (asOfOrNull.isAfter(clock.instant())) {
+        throw invalid("as_of", "must not be in the future");
+      }
+      return new AccountDto.Balance(
+          row.id(),
+          row.currency(),
+          entries.balanceAsOf(connection, id, asOfOrNull),
+          null,
+          null,
+          asOfOrNull);
+    }
+  }
+
+  public AccountDto.EntryPage entries(UUID id, int limit, String cursorOrNull) throws SQLException {
+    try (Connection connection = dataSource.getConnection()) {
+      connection.setReadOnly(true);
+      connection.setAutoCommit(true);
+      findAccount(connection, id);
+      if (limit < 1 || limit > 200) {
+        throw invalid("limit", "must be between 1 and 200");
+      }
+      long afterId = cursorOrNull == null ? 0 : Cursor.decodeLong(cursorOrNull);
+      List<AccountDto.Entry> page = entries.page(connection, id, afterId, limit + 1);
+      String nextCursor = null;
+      if (page.size() > limit) {
+        page = page.subList(0, limit);
+        nextCursor = Cursor.encode(String.valueOf(page.get(page.size() - 1).id()));
+      }
+      return new AccountDto.EntryPage(page, nextCursor);
+    }
+  }
+
+  private AccountStore.AccountRow findAccount(Connection connection, UUID id) throws SQLException {
+    Optional<AccountStore.AccountRow> row = accounts.find(connection, id);
+    return row.orElseThrow(() -> new ApiException(ErrorCode.NOT_FOUND, "account not found"));
   }
 
   private static ApiException invalid(String field, String issue) {
