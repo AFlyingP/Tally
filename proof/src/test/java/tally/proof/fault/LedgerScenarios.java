@@ -80,6 +80,9 @@ public final class LedgerScenarios {
       recover(stack, driver);
       FaultResult result = FaultResult.collect(Scenario.CONNECTION_CUT, strategy, stack, driver);
       assertThat(driver.failures()).as("connection cut driver failures").isEmpty();
+      assertThat(driver.resentOperations())
+          .as("connection cut resent operations")
+          .isGreaterThanOrEqualTo(1);
       return result;
     } finally {
       shutdown(scheduler);
@@ -115,6 +118,9 @@ public final class LedgerScenarios {
       recover(stack, driver);
       FaultResult result = FaultResult.collect(Scenario.SLOW_DATABASE, strategy, stack, driver);
       assertThat(driver.failures()).as("slow database driver failures").isEmpty();
+      assertThat(driver.resentOperations())
+          .as("slow database resent operations")
+          .isGreaterThanOrEqualTo(1);
       return result;
     } finally {
       shutdown(scheduler);
@@ -143,6 +149,9 @@ public final class LedgerScenarios {
       recover(stack, driver);
       FaultResult result = FaultResult.collect(Scenario.DATABASE_RESTART, strategy, stack, driver);
       assertThat(driver.failures()).as("database restart driver failures").isEmpty();
+      assertThat(driver.resentOperations())
+          .as("database restart resent operations")
+          .isGreaterThanOrEqualTo(1);
       return result;
     } finally {
       shutdown(scheduler);
@@ -152,20 +161,15 @@ public final class LedgerScenarios {
   public static FaultResult sameKeyBurst(
       FaultStack stack, String strategy, Sizes sizes, long seed) {
     LoadDriver driver = driver(stack, sizes, 2000, seed);
-    ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    try {
-      driver.setup();
-      driver.sameKeyBurstEvery(20);
-      driver.start();
-      awaitEnd(driver);
-      recover(stack, driver);
-      FaultResult result = FaultResult.collect(Scenario.SAME_KEY_BURST, strategy, stack, driver);
-      assertThat(driver.failures()).as("same key burst driver failures").isEmpty();
-      assertThat(driver.bursts()).as("same key bursts").isGreaterThanOrEqualTo(1);
-      return result;
-    } finally {
-      shutdown(scheduler);
-    }
+    driver.setup();
+    driver.sameKeyBurstEvery(20);
+    driver.start();
+    awaitEnd(driver);
+    recover(stack, driver);
+    FaultResult result = FaultResult.collect(Scenario.SAME_KEY_BURST, strategy, stack, driver);
+    assertThat(driver.failures()).as("same key burst driver failures").isEmpty();
+    assertThat(driver.bursts()).as("same key bursts").isGreaterThanOrEqualTo(1);
+    return result;
   }
 
   private static LoadDriver driver(FaultStack stack, Sizes sizes, long timeoutMillis, long seed) {

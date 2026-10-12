@@ -336,7 +336,7 @@ public final class FaultStack implements AutoCloseable {
     try {
       await()
           .pollDelay(Duration.ZERO)
-          .pollInterval(Duration.ofMillis(250))
+          .pollInterval(Duration.ofMillis(50))
           .atMost(timeout)
           .until(
               () ->
