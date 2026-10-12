@@ -1,0 +1,782 @@
+{
+  "components" : {
+    "schemas" : {
+      "Account" : {
+        "properties" : {
+          "createdAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "kind" : {
+            "enum" : [
+              "CUSTOMER",
+              "SETTLEMENT",
+              "CLEARING"
+            ],
+            "type" : "string"
+          },
+          "minBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "normalSide" : {
+            "enum" : [
+              "DEBIT",
+              "CREDIT"
+            ],
+            "type" : "string"
+          },
+          "status" : {
+            "enum" : [
+              "OPEN",
+              "FROZEN",
+              "CLOSED"
+            ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Balance" : {
+        "properties" : {
+          "accountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "asOf" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "available" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "balance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "held" : {
+            "format" : "int64",
+            "type" : "integer"
+          }
+        },
+        "type" : "object"
+      },
+      "CreateAccount" : {
+        "properties" : {
+          "currency" : {
+            "type" : "string"
+          },
+          "minBalance" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "normalSide" : {
+            "enum" : [
+              "DEBIT",
+              "CREDIT"
+            ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Deposit" : {
+        "properties" : {
+          "accountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "amount" : {
+            "format" : "int64",
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "description" : {
+            "maxLength" : 200,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "accountId",
+          "amount",
+          "currency"
+        ],
+        "type" : "object"
+      },
+      "Entry" : {
+        "properties" : {
+          "accountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "side" : {
+            "enum" : [
+              "DEBIT",
+              "CREDIT"
+            ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "EntryPage" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/Entry"
+            },
+            "type" : "array"
+          },
+          "nextCursor" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Health" : {
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Ready" : {
+        "properties" : {
+          "checks" : {
+            "additionalProperties" : {
+              "type" : "string"
+            },
+            "type" : "object"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Reversal" : {
+        "properties" : {
+          "reason" : {
+            "maxLength" : 200,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Transaction" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "entries" : {
+            "items" : {
+              "$ref" : "#/components/schemas/Entry"
+            },
+            "type" : "array"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "kind" : {
+            "enum" : [
+              "DEPOSIT",
+              "WITHDRAWAL",
+              "TRANSFER",
+              "REVERSAL",
+              "HOLD_CAPTURE",
+              "EXTERNAL_SETTLEMENT",
+              "EXTERNAL_COMPENSATION"
+            ],
+            "type" : "string"
+          },
+          "postedAt" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "reversedByTransactionId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "reversesTransactionId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Transfer" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "description" : {
+            "maxLength" : 200,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "destinationAccountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "sourceAccountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "amount",
+          "currency",
+          "destinationAccountId",
+          "sourceAccountId"
+        ],
+        "type" : "object"
+      },
+      "Withdrawal" : {
+        "properties" : {
+          "accountId" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "amount" : {
+            "format" : "int64",
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "description" : {
+            "maxLength" : 200,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "accountId",
+          "amount",
+          "currency"
+        ],
+        "type" : "object"
+      }
+    },
+    "securitySchemes" : {
+      "bearer" : {
+        "bearerFormat" : "JWT",
+        "scheme" : "bearer",
+        "type" : "http"
+      }
+    }
+  },
+  "info" : {
+    "title" : "Tally ledger API",
+    "version" : "1"
+  },
+  "openapi" : "3.1.0",
+  "paths" : {
+    "/health" : {
+      "get" : {
+        "operationId" : "health",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Health"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "health-controller"
+        ]
+      }
+    },
+    "/ready" : {
+      "get" : {
+        "operationId" : "ready",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Ready"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "health-controller"
+        ]
+      }
+    },
+    "/v1/accounts" : {
+      "post" : {
+        "description" : "scope: accounts:write",
+        "operationId" : "create",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateAccount"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Account"
+                }
+              }
+            },
+            "description" : "Created"
+          }
+        },
+        "tags" : [
+          "account-controller"
+        ]
+      }
+    },
+    "/v1/accounts/{id}" : {
+      "get" : {
+        "description" : "scope: accounts:read",
+        "operationId" : "get_1",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Account"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "account-controller"
+        ]
+      }
+    },
+    "/v1/accounts/{id}/balance" : {
+      "get" : {
+        "description" : "scope: accounts:read",
+        "operationId" : "balance",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "as_of",
+            "required" : false,
+            "schema" : {
+              "format" : "date-time",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Balance"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "account-controller"
+        ]
+      }
+    },
+    "/v1/accounts/{id}/close" : {
+      "post" : {
+        "description" : "scope: accounts:admin",
+        "operationId" : "close",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Account"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "account-controller"
+        ]
+      }
+    },
+    "/v1/accounts/{id}/entries" : {
+      "get" : {
+        "description" : "scope: accounts:read",
+        "operationId" : "entries",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "limit",
+            "required" : false,
+            "schema" : {
+              "default" : 50,
+              "format" : "int32",
+              "type" : "integer"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "cursor",
+            "required" : false,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/EntryPage"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "account-controller"
+        ]
+      }
+    },
+    "/v1/accounts/{id}/freeze" : {
+      "post" : {
+        "description" : "scope: accounts:admin",
+        "operationId" : "freeze",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Account"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "account-controller"
+        ]
+      }
+    },
+    "/v1/deposits" : {
+      "post" : {
+        "description" : "scope: money:write",
+        "operationId" : "deposit",
+        "parameters" : [
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Deposit"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "money-controller"
+        ]
+      }
+    },
+    "/v1/transactions/{id}" : {
+      "get" : {
+        "description" : "scope: transactions:read",
+        "operationId" : "get",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Transaction"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "transaction-controller"
+        ]
+      }
+    },
+    "/v1/transactions/{id}/reversal" : {
+      "post" : {
+        "description" : "scope: transactions:reverse",
+        "operationId" : "reverse",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Reversal"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "transaction-controller"
+        ]
+      }
+    },
+    "/v1/transfers" : {
+      "post" : {
+        "description" : "scope: money:write",
+        "operationId" : "transfer",
+        "parameters" : [
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Transfer"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "money-controller"
+        ]
+      }
+    },
+    "/v1/withdrawals" : {
+      "post" : {
+        "description" : "scope: money:write",
+        "operationId" : "withdraw",
+        "parameters" : [
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Withdrawal"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "money-controller"
+        ]
+      }
+    }
+  },
+  "security" : [
+    {
+      "bearer" : [ ]
+    }
+  ]
+}

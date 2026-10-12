@@ -68,6 +68,7 @@ subprojects {
         testClassesDirs = testSourceSet.output.classesDirs
         classpath = testSourceSet.runtimeClasspath
         useJUnitPlatform { includeTags("integration") }
+        systemProperty("openapi.write", System.getProperty("openapi.write") ?: "false")
         shouldRunAfter("test")
     }
 
