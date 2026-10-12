@@ -3,8 +3,11 @@ package tally.ledger.api;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
+import java.util.LinkedHashMap;
+import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springdoc.core.customizers.OperationCustomizer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -35,6 +38,26 @@ public class OpenApiConfig {
                         .scheme("bearer")
                         .bearerFormat("JWT")))
         .addSecurityItem(new SecurityRequirement().addList("bearer"));
+  }
+
+  @Bean
+  OpenApiCustomizer ledgerSchemas() {
+    return openApi -> {
+      if (openApi.getComponents() == null || openApi.getComponents().getSchemas() == null) {
+        return;
+      }
+      for (Schema<?> schema : openApi.getComponents().getSchemas().values()) {
+        var properties = schema.getProperties();
+        if (properties != null) {
+          schema.setProperties(new LinkedHashMap<>());
+          properties.forEach(
+              (name, property) -> schema.getProperties().put(snakeCase(name), property));
+        }
+        if (schema.getRequired() != null) {
+          schema.setRequired(schema.getRequired().stream().map(OpenApiConfig::snakeCase).toList());
+        }
+      }
+    };
   }
 
   @Bean
@@ -73,5 +96,18 @@ public class OpenApiConfig {
         .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         .authorizeHttpRequests(a -> a.anyRequest().permitAll())
         .build();
+  }
+
+  private static String snakeCase(String name) {
+    StringBuilder result = new StringBuilder();
+    for (int i = 0; i < name.length(); i++) {
+      char letter = name.charAt(i);
+      if (letter >= 'A' && letter <= 'Z') {
+        result.append('_').append(Character.toLowerCase(letter));
+      } else {
+        result.append(letter);
+      }
+    }
+    return result.toString();
   }
 }

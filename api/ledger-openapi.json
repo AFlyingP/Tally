@@ -3,7 +3,7 @@
     "schemas" : {
       "Account" : {
         "properties" : {
-          "createdAt" : {
+          "created_at" : {
             "format" : "date-time",
             "type" : "string"
           },
@@ -22,11 +22,11 @@
             ],
             "type" : "string"
           },
-          "minBalance" : {
+          "min_balance" : {
             "format" : "int64",
             "type" : "integer"
           },
-          "normalSide" : {
+          "normal_side" : {
             "enum" : [
               "DEBIT",
               "CREDIT"
@@ -44,13 +44,41 @@
         },
         "type" : "object"
       },
+      "AccountEntry" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "id" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "posted_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "side" : {
+            "enum" : [
+              "DEBIT",
+              "CREDIT"
+            ],
+            "type" : "string"
+          },
+          "transaction_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Balance" : {
         "properties" : {
-          "accountId" : {
+          "account_id" : {
             "format" : "uuid",
             "type" : "string"
           },
-          "asOf" : {
+          "as_of" : {
             "format" : "date-time",
             "type" : "string"
           },
@@ -77,11 +105,11 @@
           "currency" : {
             "type" : "string"
           },
-          "minBalance" : {
+          "min_balance" : {
             "format" : "int64",
             "type" : "integer"
           },
-          "normalSide" : {
+          "normal_side" : {
             "enum" : [
               "DEBIT",
               "CREDIT"
@@ -93,7 +121,7 @@
       },
       "Deposit" : {
         "properties" : {
-          "accountId" : {
+          "account_id" : {
             "format" : "uuid",
             "type" : "string"
           },
@@ -112,7 +140,7 @@
           }
         },
         "required" : [
-          "accountId",
+          "account_id",
           "amount",
           "currency"
         ],
@@ -120,7 +148,7 @@
       },
       "Entry" : {
         "properties" : {
-          "accountId" : {
+          "account_id" : {
             "format" : "uuid",
             "type" : "string"
           },
@@ -146,11 +174,11 @@
         "properties" : {
           "items" : {
             "items" : {
-              "$ref" : "#/components/schemas/Entry"
+              "$ref" : "#/components/schemas/AccountEntry"
             },
             "type" : "array"
           },
-          "nextCursor" : {
+          "next_cursor" : {
             "type" : "string"
           }
         },
@@ -222,15 +250,15 @@
             ],
             "type" : "string"
           },
-          "postedAt" : {
+          "posted_at" : {
             "format" : "date-time",
             "type" : "string"
           },
-          "reversedByTransactionId" : {
+          "reversed_by_transaction_id" : {
             "format" : "uuid",
             "type" : "string"
           },
-          "reversesTransactionId" : {
+          "reverses_transaction_id" : {
             "format" : "uuid",
             "type" : "string"
           }
@@ -252,11 +280,11 @@
             "minLength" : 0,
             "type" : "string"
           },
-          "destinationAccountId" : {
+          "destination_account_id" : {
             "format" : "uuid",
             "type" : "string"
           },
-          "sourceAccountId" : {
+          "source_account_id" : {
             "format" : "uuid",
             "type" : "string"
           }
@@ -264,14 +292,14 @@
         "required" : [
           "amount",
           "currency",
-          "destinationAccountId",
-          "sourceAccountId"
+          "destination_account_id",
+          "source_account_id"
         ],
         "type" : "object"
       },
       "Withdrawal" : {
         "properties" : {
-          "accountId" : {
+          "account_id" : {
             "format" : "uuid",
             "type" : "string"
           },
@@ -290,7 +318,7 @@
           }
         },
         "required" : [
-          "accountId",
+          "account_id",
           "amount",
           "currency"
         ],

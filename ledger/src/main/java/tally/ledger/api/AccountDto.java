@@ -1,5 +1,6 @@
 package tally.ledger.api;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -25,6 +26,7 @@ public final class AccountDto {
   public record Balance(
       UUID accountId, String currency, long balance, Long held, Long available, Instant asOf) {}
 
+  @Schema(name = "AccountEntry")
   public record Entry(long id, UUID transactionId, Side side, long amount, Instant postedAt) {}
 
   public record EntryPage(List<Entry> items, String nextCursor) {}
