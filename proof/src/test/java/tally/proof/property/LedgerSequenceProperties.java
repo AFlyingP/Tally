@@ -10,7 +10,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongFunction;
 import net.jqwik.api.Arbitrary;
-import net.jqwik.api.Assume;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
 import net.jqwik.api.Provide;
@@ -82,7 +81,7 @@ class LedgerSequenceProperties {
   private void run(String strategy, List<Op> ops) throws SQLException {
     String selectedStrategy = System.getProperty("proof.strategy");
     if (selectedStrategy != null && !selectedStrategy.equals(strategy)) {
-      Assume.that(false);
+      return;
     }
     if (ledger == null || !strategy.equals(ledgerStrategy)) {
       stopLedger();

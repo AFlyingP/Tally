@@ -350,6 +350,7 @@ public final class ConcurrencyRun {
       long unexpected) {
 
     public void assertCorrect() {
+      assertThat(pairs).as("overdraw pairs").isPositive();
       assertThat(doublePostedPairs).as("double posted pairs").isZero();
       assertThat(violations).as("ledger invariants").isEmpty();
       assertThat(posted).as("posted transfers").isEqualTo(transferRows);
