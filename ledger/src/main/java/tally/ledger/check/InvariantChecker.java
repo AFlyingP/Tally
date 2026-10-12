@@ -1,0 +1,225 @@
+package tally.ledger.check;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.stereotype.Component;
+
+@Component
+public class InvariantChecker {
+
+  private static final String I1 =
+      """
+      SELECT t.id, count(e.id) AS lines,
+        coalesce(sum(e.amount) FILTER (WHERE e.side = 'DEBIT'), 0) AS debits,
+        coalesce(sum(e.amount) FILTER (WHERE e.side = 'CREDIT'), 0) AS credits,
+        count(e.id) FILTER (WHERE e.currency <> t.currency) AS foreign_count
+      FROM ledger.ledger_transaction t
+      LEFT JOIN ledger.entry e ON e.transaction_id = t.id
+      GROUP BY t.id, t.amount, t.currency
+      HAVING count(e.id) < 2
+        OR coalesce(sum(e.amount) FILTER (WHERE e.side = 'DEBIT'), 0)
+          <> coalesce(sum(e.amount) FILTER (WHERE e.side = 'CREDIT'), 0)
+        OR coalesce(sum(e.amount) FILTER (WHERE e.side = 'DEBIT'), 0) <> t.amount
+        OR count(e.id) FILTER (WHERE e.currency <> t.currency) > 0
+      ORDER BY t.id
+      """;
+
+  private static final String I2 =
+      """
+      SELECT a.id,
+        coalesce(sum(CASE WHEN e.side = a.normal_side THEN e.amount ELSE -e.amount END), 0)
+          AS entries,
+        a.held, a.min_balance
+      FROM ledger.account a
+      LEFT JOIN ledger.entry e ON e.account_id = a.id
+      WHERE a.kind = 'CUSTOMER'
+      GROUP BY a.id, a.normal_side, a.held, a.min_balance
+      HAVING coalesce(sum(CASE WHEN e.side = a.normal_side THEN e.amount ELSE -e.amount END), 0)
+          - a.held < a.min_balance
+      ORDER BY a.id
+      """;
+
+  private static final String I3 =
+      """
+      WITH expected(table_name, trigger_name) AS (
+        VALUES
+          ('ledger_transaction', 'ledger_transaction_no_update'),
+          ('ledger_transaction', 'ledger_transaction_no_truncate'),
+          ('entry', 'entry_no_update'),
+          ('entry', 'entry_no_truncate'),
+          ('entry', 'entry_parent'),
+          ('ledger_transaction', 'ledger_transaction_balanced')
+      )
+      SELECT 'trigger=' || expected.trigger_name AS subject, 'missing' AS detail
+      FROM expected
+      LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = 'ledger'
+      LEFT JOIN pg_catalog.pg_class c
+        ON c.relname = expected.table_name AND c.relnamespace = n.oid
+      LEFT JOIN pg_catalog.pg_trigger t
+        ON t.tgrelid = c.oid AND t.tgname = expected.trigger_name
+      WHERE c.oid IS NULL OR t.oid IS NULL OR t.tgenabled <> 'O'
+      UNION ALL
+      SELECT 'privilege=ledger.ledger_transaction:UPDATE', 'granted'
+      WHERE pg_catalog.has_table_privilege(
+        'ledger_app', 'ledger.ledger_transaction', 'UPDATE')
+      UNION ALL
+      SELECT 'privilege=ledger.ledger_transaction:DELETE', 'granted'
+      WHERE pg_catalog.has_table_privilege(
+        'ledger_app', 'ledger.ledger_transaction', 'DELETE')
+      UNION ALL
+      SELECT 'privilege=ledger.entry:UPDATE', 'granted'
+      WHERE pg_catalog.has_table_privilege('ledger_app', 'ledger.entry', 'UPDATE')
+      UNION ALL
+      SELECT 'privilege=ledger.entry:DELETE', 'granted'
+      WHERE pg_catalog.has_table_privilege('ledger_app', 'ledger.entry', 'DELETE')
+      ORDER BY subject
+      """;
+
+  private static final String I4 =
+      """
+      SELECT a.id, a.balance,
+        coalesce(sum(CASE WHEN e.side = a.normal_side THEN e.amount ELSE -e.amount END), 0)
+          AS entries
+      FROM ledger.account a
+      LEFT JOIN ledger.entry e ON e.account_id = a.id
+      GROUP BY a.id, a.balance, a.normal_side
+      HAVING a.balance <>
+        coalesce(sum(CASE WHEN e.side = a.normal_side THEN e.amount ELSE -e.amount END), 0)
+      ORDER BY a.id
+      """;
+
+  private static final String I5 =
+      """
+      SELECT 'key=' || t.idempotency_key_id::text AS subject,
+        'transactions=' || count(*)::text AS detail
+      FROM ledger.ledger_transaction t
+      GROUP BY t.idempotency_key_id
+      HAVING count(*) > 1
+      UNION ALL
+      SELECT 'transaction=' || t.id::text, 'missing key'
+      FROM ledger.ledger_transaction t
+      LEFT JOIN ledger.idempotency_key k ON k.id = t.idempotency_key_id
+      WHERE k.id IS NULL
+      ORDER BY subject
+      """;
+
+  private static final String I10 =
+      """
+      SELECT 'transaction=' || t.id::text AS subject, 'missing event' AS detail
+      FROM ledger.ledger_transaction t
+      LEFT JOIN ledger.outbox o ON o.transaction_id = t.id
+      GROUP BY t.id
+      HAVING count(o.id) <> 1
+      UNION ALL
+      SELECT 'outbox=' || o.id::text, 'missing transaction'
+      FROM ledger.outbox o
+      LEFT JOIN ledger.ledger_transaction t ON t.id = o.transaction_id
+      WHERE t.id IS NULL
+      ORDER BY subject
+      """;
+
+  private static final String A1 =
+      """
+      SELECT 'transaction=' || t.id::text AS subject,
+        'audit_rows=' || count(a.id)::text AS detail
+      FROM ledger.ledger_transaction t
+      LEFT JOIN ledger.audit_log a ON a.transaction_id = t.id
+      GROUP BY t.id
+      HAVING count(a.id) <> 1
+      UNION ALL
+      SELECT 'audit=' || a.id::text, 'missing transaction'
+      FROM ledger.audit_log a
+      LEFT JOIN ledger.ledger_transaction t ON t.id = a.transaction_id
+      WHERE a.transaction_id IS NOT NULL AND t.id IS NULL
+      ORDER BY subject
+      """;
+
+  public List<Violation> check(Connection connection) throws SQLException {
+    connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+    connection.setReadOnly(true);
+    connection.setAutoCommit(false);
+
+    List<Violation> violations = new ArrayList<>();
+    violations.addAll(
+        read(
+            connection,
+            I1,
+            row ->
+                new Violation(
+                    "I1",
+                    "transaction=" + row.getObject("id"),
+                    "lines=%d debits=%s credits=%s"
+                        .formatted(
+                            row.getLong("lines"),
+                            row.getBigDecimal("debits").toPlainString(),
+                            row.getBigDecimal("credits").toPlainString()))));
+    violations.addAll(
+        read(
+            connection,
+            I2,
+            row ->
+                new Violation(
+                    "I2",
+                    "account=" + row.getObject("id"),
+                    "entries=%s held=%d min=%d"
+                        .formatted(
+                            row.getBigDecimal("entries").toPlainString(),
+                            row.getLong("held"),
+                            row.getLong("min_balance")))));
+    violations.addAll(
+        read(
+            connection,
+            I3,
+            row -> new Violation("I3", row.getString("subject"), row.getString("detail"))));
+    violations.addAll(
+        read(
+            connection,
+            I4,
+            row ->
+                new Violation(
+                    "I4",
+                    "account=" + row.getObject("id"),
+                    "stored=%d entries=%s"
+                        .formatted(
+                            row.getLong("balance"),
+                            row.getBigDecimal("entries").toPlainString()))));
+    violations.addAll(
+        read(
+            connection,
+            I5,
+            row -> new Violation("I5", row.getString("subject"), row.getString("detail"))));
+    violations.addAll(
+        read(
+            connection,
+            I10,
+            row -> new Violation("I10", row.getString("subject"), row.getString("detail"))));
+    violations.addAll(
+        read(
+            connection,
+            A1,
+            row -> new Violation("A1", row.getString("subject"), row.getString("detail"))));
+    connection.commit();
+    return violations;
+  }
+
+  private static List<Violation> read(Connection connection, String sql, RowMapper mapper)
+      throws SQLException {
+    try (PreparedStatement select = connection.prepareStatement(sql);
+        ResultSet rows = select.executeQuery()) {
+      List<Violation> violations = new ArrayList<>();
+      while (rows.next()) {
+        violations.add(mapper.map(rows));
+      }
+      return violations;
+    }
+  }
+
+  @FunctionalInterface
+  private interface RowMapper {
+    Violation map(ResultSet row) throws SQLException;
+  }
+}

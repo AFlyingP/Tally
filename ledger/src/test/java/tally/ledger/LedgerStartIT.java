@@ -3,8 +3,12 @@ package tally.ledger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -79,6 +83,62 @@ class LedgerStartIT extends LedgerIT {
     try (ConfigurableApplicationContext service = started.get()) {
       HttpResponse<String> health = send(request(url(service, "/health"), null).GET());
       assertThat(health.statusCode()).isEqualTo(200);
+    }
+  }
+
+  @Test
+  void unknownCommandReturnsTwo() {
+    ByteArrayOutputStream standardOut = new ByteArrayOutputStream();
+    ByteArrayOutputStream standardErr = new ByteArrayOutputStream();
+    int result;
+
+    try (PrintStream out = new PrintStream(standardOut, true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(standardErr, true, StandardCharsets.UTF_8)) {
+      result = LedgerApplication.command(new String[] {"bogus"}, out, err);
+    }
+
+    assertThat(result).isEqualTo(2);
+    assertThat(standardErr.toString(StandardCharsets.UTF_8).trim())
+        .isEqualTo("unknown command: bogus");
+    assertThat(standardOut.toString(StandardCharsets.UTF_8)).isEmpty();
+  }
+
+  @Test
+  void checkInvariantsCommandRunsWithoutWebServer() {
+    app();
+    ByteArrayOutputStream standardOut = new ByteArrayOutputStream();
+    ByteArrayOutputStream standardErr = new ByteArrayOutputStream();
+
+    try {
+      System.setProperty("spring.datasource.url", POSTGRES.getJdbcUrl());
+      System.setProperty("spring.datasource.password", PASSWORD);
+      System.setProperty("tally.ledger.roles", "api");
+      try (PrintStream out = new PrintStream(standardOut, true, StandardCharsets.UTF_8);
+          PrintStream err = new PrintStream(standardErr, true, StandardCharsets.UTF_8)) {
+        int result = LedgerApplication.command(new String[] {"check-invariants"}, out, err);
+
+        assertThat(result).isIn(0, 1);
+        assertThat(standardErr.toString(StandardCharsets.UTF_8)).isEmpty();
+        List<String> lines = standardOut.toString(StandardCharsets.UTF_8).lines().toList();
+        assertThat(lines).isNotEmpty();
+        if (result == 0) {
+          assertThat(lines.getLast()).startsWith("invariants ok: 0 violations");
+        } else {
+          assertThat(lines.getLast()).matches("invariants failed: [1-9][0-9]* violations");
+        }
+
+        standardOut.reset();
+        standardErr.reset();
+        assertThat(
+                LedgerApplication.command(new String[] {"check-invariants", "--bogus"}, out, err))
+            .isEqualTo(2);
+        assertThat(standardErr.toString(StandardCharsets.UTF_8).trim())
+            .isEqualTo("check failed: unknown flag --bogus");
+      }
+    } finally {
+      System.clearProperty("spring.datasource.url");
+      System.clearProperty("spring.datasource.password");
+      System.clearProperty("tally.ledger.roles");
     }
   }
 

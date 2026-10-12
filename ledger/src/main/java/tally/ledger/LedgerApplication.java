@@ -1,10 +1,15 @@
 package tally.ledger;
 
+import java.io.PrintStream;
+import java.util.Arrays;
 import javax.sql.DataSource;
+import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import tally.ledger.check.CheckCommand;
 import tally.platform.web.DbReadinessCheck;
 
 @SpringBootApplication(scanBasePackages = {"tally.ledger", "tally.platform"})
@@ -18,7 +23,30 @@ public class LedgerApplication {
   }
 
   public static void main(String[] args) {
-    builder().run(args);
+    if (args.length > 0 && !args[0].startsWith("--")) {
+      System.exit(command(args, System.out, System.err));
+    } else {
+      builder().run(args);
+    }
+  }
+
+  static int command(String[] args, PrintStream out, PrintStream err) {
+    if (args[0].equals("check-invariants")) {
+      try (ConfigurableApplicationContext context =
+          builder()
+              .web(WebApplicationType.NONE)
+              .properties(
+                  "spring.flyway.enabled=false",
+                  "spring.main.banner-mode=off",
+                  "logging.level.root=WARN")
+              .run()) {
+        return context
+            .getBean(CheckCommand.class)
+            .run(Arrays.copyOfRange(args, 1, args.length), out, err);
+      }
+    }
+    err.println("unknown command: " + args[0]);
+    return 2;
   }
 
   @Bean

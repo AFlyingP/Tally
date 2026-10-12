@@ -7,6 +7,7 @@ import java.util.List;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -34,6 +35,7 @@ import tally.platform.web.RequestIdFilter;
 
 /** Validates access tokens and answers 401 and 403 in the error shape. */
 @Configuration
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnProperty("tally.auth.jwks-uri")
 @EnableMethodSecurity
 public class ResourceServerConfig {
