@@ -35,11 +35,8 @@ public class LedgerApplication {
       try (ConfigurableApplicationContext context =
           builder()
               .web(WebApplicationType.NONE)
-              .properties(
-                  "spring.flyway.enabled=false",
-                  "spring.main.banner-mode=off",
-                  "logging.level.root=WARN")
-              .run()) {
+              .properties("spring.flyway.enabled=false", "spring.main.banner-mode=off")
+              .run("--logging.level.root=WARN", "--logging.level.tally=WARN")) {
         return context
             .getBean(CheckCommand.class)
             .run(Arrays.copyOfRange(args, 1, args.length), out, err);
