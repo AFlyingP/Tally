@@ -205,14 +205,14 @@ public class AccountService {
   }
 
   public AccountDto.EntryPage entries(UUID id, int limit, String cursorOrNull) throws SQLException {
+    if (limit < 1 || limit > 200) {
+      throw invalid("limit", "must be between 1 and 200");
+    }
+    long afterId = cursorOrNull == null ? 0 : Cursor.decodeLong(cursorOrNull);
     try (Connection connection = dataSource.getConnection()) {
       connection.setReadOnly(true);
       connection.setAutoCommit(true);
       findAccount(connection, id);
-      if (limit < 1 || limit > 200) {
-        throw invalid("limit", "must be between 1 and 200");
-      }
-      long afterId = cursorOrNull == null ? 0 : Cursor.decodeLong(cursorOrNull);
       List<AccountDto.Entry> page = entries.page(connection, id, afterId, limit + 1);
       String nextCursor = null;
       if (page.size() > limit) {

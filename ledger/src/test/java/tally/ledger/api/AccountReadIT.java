@@ -222,9 +222,12 @@ class AccountReadIT extends LedgerIT {
   void entriesRejectBadLimitAndCursor() throws Exception {
     UUID account = create("EUR");
     String path = "/v1/accounts/" + account + "/entries";
+    String missingPath = "/v1/accounts/" + UUID.randomUUID() + "/entries";
 
     assertError(get(path + "?limit=0", token(Role.SERVICE_DESK)), 400, "VALIDATION_FAILED");
     assertError(get(path + "?limit=201", token(Role.SERVICE_DESK)), 400, "VALIDATION_FAILED");
+    assertError(get(missingPath + "?limit=0", token(Role.SERVICE_DESK)), 400, "VALIDATION_FAILED");
+    assertError(get(missingPath + "?limit=1", token(Role.SERVICE_DESK)), 404, "NOT_FOUND");
     assertError(
         get(path + "?cursor=%2A%2A%2A", token(Role.SERVICE_DESK)), 400, "VALIDATION_FAILED");
   }
