@@ -324,6 +324,7 @@ class LedgerWriterIT extends LedgerIT {
     deposit(a, 1000);
     deposit(b, 1000);
     AtomicInteger completed = new AtomicInteger();
+    AtomicInteger maxAttempts = new AtomicInteger();
     List<Callable<Void>> tasks = new ArrayList<>();
     for (int i = 0; i < 2; i++) {
       UUID source = i == 0 ? a : b;
@@ -331,7 +332,10 @@ class LedgerWriterIT extends LedgerIT {
       tasks.add(
           () -> {
             for (int j = 0; j < 200; j++) {
-              transfer(source, destination, 1);
+              StrategyRunner.Attempted<PostedTransaction> result =
+                  postWithAttempts(
+                      TransactionKind.TRANSFER, Posting.move("EUR", source, destination, 1));
+              maxAttempts.accumulateAndGet(result.attempts(), Math::max);
               completed.incrementAndGet();
             }
             return null;
@@ -341,6 +345,7 @@ class LedgerWriterIT extends LedgerIT {
     runConcurrently(tasks, 60);
 
     assertThat(completed.get()).isEqualTo(400);
+    assertThat(maxAttempts.get()).isEqualTo(1);
     Map<UUID, AccountState> after = accounts(a, b);
     assertThat(after.get(a).balance()).isEqualTo(1000);
     assertThat(after.get(b).balance()).isEqualTo(1000);
@@ -513,16 +518,19 @@ class LedgerWriterIT extends LedgerIT {
   }
 
   private PostedTransaction post(TransactionKind kind, Posting posting) {
+    return postWithAttempts(kind, posting).value();
+  }
+
+  private StrategyRunner.Attempted<PostedTransaction> postWithAttempts(
+      TransactionKind kind, Posting posting) {
     String key = UuidV7.next(clock).toString();
-    return runner
-        .execute(
-            tx -> {
-              long keyId =
-                  keys.claim(tx.connection(), CALLER.clientId(), key, new byte[32], clock.instant())
-                      .orElseThrow();
-              return writer.post(tx, command(kind, posting, keyId, key));
-            })
-        .value();
+    return runner.execute(
+        tx -> {
+          long keyId =
+              keys.claim(tx.connection(), CALLER.clientId(), key, new byte[32], clock.instant())
+                  .orElseThrow();
+          return writer.post(tx, command(kind, posting, keyId, key));
+        });
   }
 
   private static PostingCommand command(
