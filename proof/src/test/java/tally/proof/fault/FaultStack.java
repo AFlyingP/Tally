@@ -16,7 +16,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -24,9 +26,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,6 +41,7 @@ import org.testcontainers.DockerClientFactory;
 import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
+import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.toxiproxy.ToxiproxyContainer;
@@ -44,6 +49,8 @@ import org.testcontainers.utility.MountableFile;
 import tally.ledger.check.InvariantChecker;
 import tally.ledger.check.Violation;
 import tally.platform.testing.TestIssuer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /** Containers and stable addresses for exercising ledger failures. */
 public final class FaultStack implements AutoCloseable {
@@ -57,6 +64,10 @@ public final class FaultStack implements AutoCloseable {
   private static final String PASSWORD = "test-password";
   private static final String LEDGER_IMAGE = "tally/ledger:dev";
   private static final Duration READY_TIMEOUT = Duration.ofSeconds(120);
+  private static final long POSTGRES_MEMORY_MB = 1024;
+  private static final long TOXIPROXY_MEMORY_MB = 128;
+  private static final long LEDGER_MEMORY_MB = 1024;
+  private static final long K6_MEMORY_MB = 512;
 
   private final DockerClient dockerClient;
   private final Network network;
@@ -219,6 +230,106 @@ public final class FaultStack implements AutoCloseable {
     return issuer;
   }
 
+  public static Map<String, Long> containerLimitsMb() {
+    Map<String, Long> limits = new LinkedHashMap<>();
+    limits.put("postgres", POSTGRES_MEMORY_MB);
+    limits.put("toxiproxy", TOXIPROXY_MEMORY_MB);
+    limits.put("ledger", LEDGER_MEMORY_MB);
+    limits.put("k6", K6_MEMORY_MB);
+    return Collections.unmodifiableMap(limits);
+  }
+
+  public K6Result runK6(Map<String, String> env, Path accountsFile) {
+    int durationSeconds = Integer.parseInt(env.get("DURATION"));
+    Map<String, String> containerEnv = new HashMap<>(env);
+    containerEnv.put("BASE_URL", "http://ledger:8080");
+    GenericContainer<?> k6 =
+        new GenericContainer<>("grafana/k6:1.8.1")
+            .withNetwork(network)
+            .withEnv(containerEnv)
+            .withCopyFileToContainer(
+                MountableFile.forHostPath(
+                    Path.of(System.getProperty("proof.root", ".."), "load/transfer.js").toString()),
+                "/scripts/transfer.js")
+            .withCopyFileToContainer(
+                MountableFile.forHostPath(accountsFile.toString()), "/data/accounts.json")
+            .withCommand("run", "/scripts/transfer.js")
+            .withStartupCheckStrategy(
+                new OneShotStartupCheckStrategy()
+                    .withTimeout(Duration.ofSeconds(durationSeconds + 60L)))
+            .withCreateContainerCmdModifier(
+                command -> {
+                  command.withUser("0:0");
+                  command.getHostConfig().withMemory(K6_MEMORY_MB * 1024 * 1024);
+                });
+    try {
+      try {
+        k6.start();
+      } catch (RuntimeException e) {
+        if (k6.getContainerId() != null) {
+          Long exitCode =
+              dockerClient
+                  .inspectContainerCmd(k6.getContainerId())
+                  .exec()
+                  .getState()
+                  .getExitCodeLong();
+          if (exitCode != null && exitCode != 0) {
+            String logs = k6.getLogs();
+            String lastLogs = logs.substring(Math.max(0, logs.length() - 2_000));
+            throw new IllegalStateException("k6 exited with code " + exitCode + ": " + lastLogs, e);
+          }
+        }
+        throw e;
+      }
+      Long exitCode =
+          dockerClient.inspectContainerCmd(k6.getContainerId()).exec().getState().getExitCodeLong();
+      if (exitCode != null && exitCode != 0) {
+        String logs = k6.getLogs();
+        String lastLogs = logs.substring(Math.max(0, logs.length() - 2_000));
+        throw new IllegalStateException("k6 exited with code " + exitCode + ": " + lastLogs);
+      }
+      Path summaryFile;
+      try {
+        summaryFile = Files.createTempFile("k6-summary-", ".json");
+      } catch (IOException e) {
+        throw new UncheckedIOException("failed to create k6 summary", e);
+      }
+      try {
+        k6.copyFileFromContainer(
+            "/data/summary.json",
+            source -> Files.copy(source, summaryFile, StandardCopyOption.REPLACE_EXISTING));
+        JsonNode summary = JsonMapper.builder().build().readTree(summaryFile.toFile());
+        return new K6Result(
+            summary.path("posted").asLong(),
+            summary.path("insufficient").asLong(),
+            summary.path("exhausted").asLong(),
+            summary.path("unexpected").asLong(),
+            summary.path("retries").asLong(),
+            summary.path("p50_ms").asDouble(),
+            summary.path("p99_ms").asDouble(),
+            summary.path("duration_s").asDouble());
+      } finally {
+        try {
+          Files.deleteIfExists(summaryFile);
+        } catch (IOException e) {
+          throw new UncheckedIOException("failed to delete k6 summary", e);
+        }
+      }
+    } finally {
+      k6.stop();
+    }
+  }
+
+  public record K6Result(
+      long posted,
+      long insufficient,
+      long exhausted,
+      long unexpected,
+      long retries,
+      double p50Ms,
+      double p99Ms,
+      double durationS) {}
+
   public void awaitReady(String alias, Duration timeout) {
     Part part = part(alias);
     container(part);
@@ -305,7 +416,12 @@ public final class FaultStack implements AutoCloseable {
           case TOXIPROXY -> 8474;
           case LEDGER -> 8080;
         };
-    long memoryMb = part == Part.TOXIPROXY ? 128 : 1024;
+    long memoryMb =
+        switch (part) {
+          case POSTGRES -> POSTGRES_MEMORY_MB;
+          case TOXIPROXY -> TOXIPROXY_MEMORY_MB;
+          case LEDGER -> LEDGER_MEMORY_MB;
+        };
     container
         .withNetwork(network)
         .withNetworkAliases(alias(part))
