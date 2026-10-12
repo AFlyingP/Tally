@@ -18,6 +18,12 @@ dependencies {
     testRuntimeOnly(libs.junit.launcher)
 }
 
+tasks.processTestResources {
+    val tries = if ((findProperty("proof.size") ?: "ci") == "eval") "500" else "30"
+    inputs.property("jqwikTries", tries)
+    filesMatching("junit-platform.properties") { expand("jqwikTries" to tries) }
+}
+
 val proofProps = listOf("proof.size", "proof.seed", "proof.strategy", "proof.scenario", "proof.base")
 
 fun Test.passProofProps() {
