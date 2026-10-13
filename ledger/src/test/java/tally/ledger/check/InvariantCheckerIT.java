@@ -11,7 +11,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -21,6 +23,8 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
+import tally.ledger.audit.AuditEntry;
+import tally.ledger.audit.AuditWriter;
 import tally.ledger.testing.LedgerIT;
 import tally.platform.security.Role;
 import tools.jackson.databind.JsonNode;
@@ -115,6 +119,80 @@ class InvariantCheckerIT extends LedgerIT {
     List<Violation> found = forSubject(violations, "I2", "account=" + account);
     assertThat(found).hasSize(1);
     assertThat(found.getFirst().detail()).isEqualTo("entries=-100 held=0 min=0");
+  }
+
+  @Test
+  void detectsWrongHeldTotal() throws Exception {
+    UUID account = createAccount();
+    deposit(account, 100);
+    long held = storedHeld(account);
+    List<Violation> violations;
+
+    try (Connection db = superJdbc()) {
+      setHeld(db, account, held + 1);
+      try {
+        violations = check();
+      } finally {
+        setHeld(db, account, held);
+      }
+    }
+
+    assertThat(forSubject(violations, "I6", "account=" + account))
+        .containsExactly(new Violation("I6", "account=" + account, "held=1 active=0"));
+  }
+
+  @Test
+  void detectsSecondCaptureEvent() throws Exception {
+    UUID source = createAccount();
+    UUID destination = createAccount();
+    deposit(source, 500);
+    UUID holdId = placeHold(source, 200);
+    captureHold(holdId, 100, destination);
+    CapturedHold captured = capturedHold(holdId);
+    List<Violation> violations;
+    long duplicateEventId = -1;
+
+    try (Connection db = superJdbc();
+        Statement statement = db.createStatement()) {
+      statement.execute("DROP INDEX ledger.hold_event_final_uq");
+      try {
+        UUID auditId =
+            app()
+                .getBean(AuditWriter.class)
+                .record(
+                    db,
+                    new AuditEntry(
+                        "checker-test",
+                        "operator",
+                        "holds:write",
+                        "hold.capture",
+                        "hold",
+                        holdId.toString(),
+                        key(),
+                        "SUCCESS",
+                        null,
+                        null));
+        duplicateEventId = insertSecondCaptureEvent(db, holdId, captured, auditId);
+        violations = check();
+      } finally {
+        if (duplicateEventId >= 0) {
+          statement.execute("ALTER TABLE ledger.hold_event DISABLE TRIGGER hold_event_no_update");
+          try (PreparedStatement delete =
+              db.prepareStatement("DELETE FROM ledger.hold_event WHERE id = ?")) {
+            delete.setLong(1, duplicateEventId);
+            assertThat(delete.executeUpdate()).isEqualTo(1);
+          } finally {
+            statement.execute("ALTER TABLE ledger.hold_event ENABLE TRIGGER hold_event_no_update");
+          }
+        }
+        statement.execute(
+            "CREATE UNIQUE INDEX hold_event_final_uq ON ledger.hold_event (hold_id)"
+                + " WHERE type <> 'PLACED'");
+      }
+    }
+
+    assertThat(forSubject(violations, "I7", "hold=" + holdId))
+        .containsExactly(new Violation("I7", "hold=" + holdId, "events=2"));
   }
 
   @Test
@@ -314,6 +392,61 @@ class InvariantCheckerIT extends LedgerIT {
     return UUID.fromString(JSON.readTree(response.body()).get("id").asString());
   }
 
+  private UUID placeHold(UUID account, long amount) throws Exception {
+    String body =
+        ("{\"account_id\":\"%s\",\"amount\":%d,\"currency\":\"EUR\"," + "\"expires_at\":\"%s\"}")
+            .formatted(
+                account, amount, Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.SECONDS));
+    var response = post("/v1/holds", token(Role.OPERATOR), body, "Idempotency-Key", key());
+    assertThat(response.statusCode()).isEqualTo(201);
+    return UUID.fromString(JSON.readTree(response.body()).get("id").asString());
+  }
+
+  private void captureHold(UUID holdId, long amount, UUID destination) throws Exception {
+    String body =
+        "{\"amount\":%d,\"destination_account_id\":\"%s\"}".formatted(amount, destination);
+    var response =
+        post(
+            "/v1/holds/" + holdId + "/capture",
+            token(Role.OPERATOR),
+            body,
+            "Idempotency-Key",
+            key());
+    assertThat(response.statusCode()).isEqualTo(201);
+  }
+
+  private CapturedHold capturedHold(UUID holdId) throws SQLException {
+    try (Connection db = superJdbc();
+        PreparedStatement select =
+            db.prepareStatement(
+                "SELECT captured_amount, capture_transaction_id FROM ledger.hold WHERE id = ?")) {
+      select.setObject(1, holdId);
+      try (ResultSet row = select.executeQuery()) {
+        assertThat(row.next()).isTrue();
+        return new CapturedHold(
+            row.getLong("captured_amount"), row.getObject("capture_transaction_id", UUID.class));
+      }
+    }
+  }
+
+  private static long insertSecondCaptureEvent(
+      Connection db, UUID holdId, CapturedHold captured, UUID auditId) throws SQLException {
+    try (PreparedStatement insert =
+        db.prepareStatement(
+            "INSERT INTO ledger.hold_event (hold_id, type, amount, transaction_id, actor,"
+                + " occurred_at, audit_id) VALUES (?, 'CAPTURED', ?, ?, 'checker-test', now(), ?)"
+                + " RETURNING id")) {
+      insert.setObject(1, holdId);
+      insert.setLong(2, captured.amount());
+      insert.setObject(3, captured.transactionId());
+      insert.setObject(4, auditId);
+      try (ResultSet row = insert.executeQuery()) {
+        assertThat(row.next()).isTrue();
+        return row.getLong("id");
+      }
+    }
+  }
+
   private List<Violation> check() throws SQLException {
     try (Connection db = appJdbc()) {
       return app().getBean(InvariantChecker.class).check(db);
@@ -340,10 +473,31 @@ class InvariantCheckerIT extends LedgerIT {
     }
   }
 
+  private long storedHeld(UUID account) throws SQLException {
+    try (Connection db = superJdbc();
+        PreparedStatement select =
+            db.prepareStatement("SELECT held FROM ledger.account WHERE id = ?")) {
+      select.setObject(1, account);
+      try (ResultSet row = select.executeQuery()) {
+        assertThat(row.next()).isTrue();
+        return row.getLong("held");
+      }
+    }
+  }
+
   private static void setBalance(Connection db, UUID account, long balance) throws SQLException {
     try (PreparedStatement update =
         db.prepareStatement("UPDATE ledger.account SET balance = ? WHERE id = ?")) {
       update.setLong(1, balance);
+      update.setObject(2, account);
+      assertThat(update.executeUpdate()).isEqualTo(1);
+    }
+  }
+
+  private static void setHeld(Connection db, UUID account, long held) throws SQLException {
+    try (PreparedStatement update =
+        db.prepareStatement("UPDATE ledger.account SET held = ? WHERE id = ?")) {
+      update.setLong(1, held);
       update.setObject(2, account);
       assertThat(update.executeUpdate()).isEqualTo(1);
     }
@@ -526,6 +680,8 @@ class InvariantCheckerIT extends LedgerIT {
   }
 
   private record EntryRow(long id, UUID accountId, long amount) {}
+
+  private record CapturedHold(long amount, UUID transactionId) {}
 
   private record OutboxRow(
       long id,

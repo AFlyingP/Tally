@@ -107,6 +107,48 @@ public class InvariantChecker {
       ORDER BY subject
       """;
 
+  private static final String I6 =
+      """
+      SELECT a.id, 'held=' || a.held::text || ' active=' || coalesce(sum(h.amount), 0)::text AS detail
+      FROM ledger.account a
+      LEFT JOIN ledger.hold h ON h.account_id = a.id AND h.state = 'ACTIVE'
+      GROUP BY a.id, a.held
+      HAVING a.held <> coalesce(sum(h.amount), 0)
+      UNION ALL
+      SELECT a.id, 'available=' || (a.balance - a.held)::text || ' min=' || a.min_balance::text
+      FROM ledger.account a
+      WHERE a.kind = 'CUSTOMER' AND a.balance - a.held < a.min_balance
+      ORDER BY id, detail
+      """;
+
+  private static final String I7 =
+      """
+      SELECT h.id, 'events=' || count(*)::text AS detail
+      FROM ledger.hold h
+      JOIN ledger.hold_event e ON e.hold_id = h.id AND e.type <> 'PLACED'
+      GROUP BY h.id
+      HAVING count(*) > 1
+      UNION ALL
+      SELECT h.id,
+        'captured=' || h.captured_amount::text || ' transaction=' || t.amount::text
+      FROM ledger.hold h
+      JOIN ledger.ledger_transaction t ON t.id = h.capture_transaction_id
+      WHERE h.state = 'CAPTURED'
+        AND (h.captured_amount <> t.amount OR h.captured_amount > h.amount)
+      UNION ALL
+      SELECT h.id, 'state=' || h.state || ' event=' || coalesce(last_event.type, 'ACTIVE')
+      FROM ledger.hold h
+      LEFT JOIN LATERAL (
+        SELECT e.type
+        FROM ledger.hold_event e
+        WHERE e.hold_id = h.id AND e.type <> 'PLACED'
+        ORDER BY e.occurred_at DESC, e.id DESC
+        LIMIT 1
+      ) last_event ON true
+      WHERE h.state <> coalesce(last_event.type, 'ACTIVE')
+      ORDER BY id, detail
+      """;
+
   private static final String I10 =
       """
       SELECT 'transaction=' || t.id::text AS subject, 'missing event' AS detail
@@ -135,6 +177,11 @@ public class InvariantChecker {
       FROM ledger.audit_log a
       LEFT JOIN ledger.ledger_transaction t ON t.id = a.transaction_id
       WHERE a.transaction_id IS NOT NULL AND t.id IS NULL
+      UNION ALL
+      SELECT 'hold=' || e.hold_id::text, 'event=' || e.id::text || ' missing audit'
+      FROM ledger.hold_event e
+      LEFT JOIN ledger.audit_log a ON a.id = e.audit_id
+      WHERE a.id IS NULL
       ORDER BY subject
       """;
 
@@ -192,6 +239,16 @@ public class InvariantChecker {
             connection,
             I5,
             row -> new Violation("I5", row.getString("subject"), row.getString("detail"))));
+    violations.addAll(
+        read(
+            connection,
+            I6,
+            row -> new Violation("I6", "account=" + row.getObject("id"), row.getString("detail"))));
+    violations.addAll(
+        read(
+            connection,
+            I7,
+            row -> new Violation("I7", "hold=" + row.getObject("id"), row.getString("detail"))));
     violations.addAll(
         read(
             connection,
