@@ -1,4 +1,5 @@
 import http from 'k6/http';
+import { randomSeed } from 'k6';
 import { Counter } from 'k6/metrics';
 
 const baseUrl = __ENV.BASE_URL;
@@ -23,6 +24,8 @@ const insufficient = new Counter('insufficient');
 const exhausted = new Counter('exhausted');
 const unexpected = new Counter('unexpected');
 const retries = new Counter('retries');
+
+randomSeed(Number(__ENV.SEED) + __VU);
 
 export default function () {
   const source =

@@ -41,12 +41,12 @@ public final class LoadComparison {
   public static List<Map<String, Object>> run(Sizes sizes, long seed) {
     List<Map<String, Object>> rows = new ArrayList<>();
     for (String strategy : STRATEGIES) {
-      rows.addAll(runStrategy(strategy, sizes));
+      rows.addAll(runStrategy(strategy, sizes, seed));
     }
     return List.copyOf(rows);
   }
 
-  private static List<Map<String, Object>> runStrategy(String strategy, Sizes sizes) {
+  private static List<Map<String, Object>> runStrategy(String strategy, Sizes sizes, long seed) {
     FaultStack stack =
         FaultStack.start(
             strategy,
@@ -61,7 +61,7 @@ public final class LoadComparison {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (String workload : sizes.loadWorkloads()) {
           for (int clients : sizes.loadClients()) {
-            rows.add(runRow(stack, accountsFile, strategy, workload, clients, sizes));
+            rows.add(runRow(stack, accountsFile, strategy, workload, clients, sizes, seed));
           }
         }
         try {
@@ -138,7 +138,8 @@ public final class LoadComparison {
       String strategy,
       String workload,
       int clients,
-      Sizes sizes) {
+      Sizes sizes,
+      long seed) {
     List<Double> transfersPerSecond = new ArrayList<>();
     List<Double> p50Ms = new ArrayList<>();
     List<Double> p99Ms = new ArrayList<>();
@@ -157,7 +158,9 @@ public final class LoadComparison {
               "DURATION",
               Integer.toString(sizes.loadSeconds()),
               "RUN_ID",
-              UUID.randomUUID().toString());
+              UUID.randomUUID().toString(),
+              "SEED",
+              Long.toString(seed));
       K6Result result = stack.runK6(environment, accountsFile);
       if (result.unexpected() > 0) {
         throw new IllegalStateException("unexpected responses in load run: " + result.unexpected());

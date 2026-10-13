@@ -11,18 +11,24 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.core.util.DefaultIndenter;
+import tools.jackson.core.util.DefaultPrettyPrinter;
 import tools.jackson.databind.json.JsonMapper;
 
 public final class Results {
 
   private static final JsonMapper JSON = JsonMapper.builder().build();
+  private static final DefaultPrettyPrinter PRETTY_PRINTER =
+      new DefaultPrettyPrinter()
+          .withObjectIndenter(new DefaultIndenter("  ", "\n"))
+          .withArrayIndenter(new DefaultIndenter("  ", "\n"));
 
   private Results() {}
 
   public static void writeSection(Path dir, String name, Map<String, Object> content) {
     try {
       Files.createDirectories(dir);
-      String json = JSON.writerWithDefaultPrettyPrinter().writeValueAsString(content) + "\n";
+      String json = JSON.writer().with(PRETTY_PRINTER).writeValueAsString(content) + "\n";
       Files.writeString(dir.resolve(name + ".json"), json, StandardCharsets.UTF_8);
     } catch (IOException e) {
       throw new UncheckedIOException("failed to write results section", e);

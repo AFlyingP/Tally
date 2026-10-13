@@ -52,11 +52,8 @@ public final class MachineInfo {
   }
 
   private static long memoryMb() {
-    java.lang.management.OperatingSystemMXBean bean = ManagementFactory.getOperatingSystemMXBean();
-    if (bean instanceof OperatingSystemMXBean operatingSystem) {
-      return operatingSystem.getTotalMemorySize() / BYTES_PER_MEGABYTE;
-    }
-    return -1;
+    OperatingSystemMXBean bean = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
+    return bean.getTotalMemorySize() / BYTES_PER_MEGABYTE;
   }
 
   private static long dockerMemoryMb() {
@@ -67,28 +64,28 @@ public final class MachineInfo {
               .redirectErrorStream(true)
               .start();
     } catch (IOException e) {
-      return -1;
+      throw new IllegalStateException("failed to read docker memory", e);
     }
     try (InputStream outputStream = process.getInputStream()) {
       if (!process.waitFor(30, TimeUnit.SECONDS)) {
         process.destroyForcibly();
-        return -1;
+        throw new IllegalStateException("failed to read docker memory");
       }
       if (process.exitValue() != 0) {
-        return -1;
+        throw new IllegalStateException("failed to read docker memory");
       }
       String output = new String(outputStream.readAllBytes(), StandardCharsets.UTF_8);
       try {
         return Long.parseLong(output.trim()) / BYTES_PER_MEGABYTE;
       } catch (NumberFormatException e) {
-        return -1;
+        throw new IllegalStateException("failed to read docker memory", e);
       }
     } catch (IOException e) {
-      return -1;
+      throw new IllegalStateException("failed to read docker memory", e);
     } catch (InterruptedException e) {
       process.destroyForcibly();
       Thread.currentThread().interrupt();
-      return -1;
+      throw new IllegalStateException("failed to read docker memory", e);
     }
   }
 }

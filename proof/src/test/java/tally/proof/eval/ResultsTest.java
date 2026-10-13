@@ -2,6 +2,8 @@ package tally.proof.eval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,5 +42,24 @@ class ResultsTest {
     Map<String, Object> read = Results.readSection(directory, "comparison");
 
     assertThat(read.keySet()).containsExactly("first", "second", "third");
+  }
+
+  @Test
+  void sectionIsWrittenWithTwoSpaceIndent(@TempDir Path directory) throws Exception {
+    LinkedHashMap<String, Object> section = new LinkedHashMap<>();
+    section.put("name", "load");
+    section.put("rows", List.of(1, 2));
+
+    Results.writeSection(directory, "comparison", section);
+
+    assertThat(Files.readString(directory.resolve("comparison.json"), StandardCharsets.UTF_8))
+        .isEqualTo(
+            "{\n"
+                + "  \"name\" : \"load\",\n"
+                + "  \"rows\" : [\n"
+                + "    1,\n"
+                + "    2\n"
+                + "  ]\n"
+                + "}\n");
   }
 }
