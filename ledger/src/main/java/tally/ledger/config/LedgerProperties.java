@@ -12,7 +12,8 @@ public record LedgerProperties(
     Extbank extbank,
     Retry retry,
     Idempotency idempotency,
-    long lockWaitMs) {
+    long lockWaitMs,
+    Expiry expiry) {
 
   public static final Set<String> KNOWN_ROLES =
       Set.of("api", "scheduler", "orchestrator", "relay", "expiry", "recon", "sealer");
@@ -26,6 +27,15 @@ public record LedgerProperties(
     public Idempotency {
       if (waitMs < 100 || waitMs > 60000) {
         throw invalid("tally.ledger.idempotency.wait-ms", "must be between 100 and 60000");
+      }
+    }
+  }
+
+  public record Expiry(long pollMs) {
+
+    public Expiry {
+      if (pollMs < 50 || pollMs > 600000) {
+        throw invalid("tally.ledger.expiry.poll-ms", "must be between 50 and 600000");
       }
     }
   }

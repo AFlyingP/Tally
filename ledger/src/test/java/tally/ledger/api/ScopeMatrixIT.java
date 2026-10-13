@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -30,29 +33,55 @@ class ScopeMatrixIT extends LedgerIT {
             UUID.randomUUID().toString());
     assertThat(deposit.statusCode()).isEqualTo(201);
     UUID transaction = UUID.fromString(JSON.readTree(deposit.body()).get("id").asString());
+    Instant expiresAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.SECONDS);
+    HttpResponse<String> placed =
+        post(
+            "/v1/holds",
+            token(Role.OPERATOR),
+            hold(account, 10, expiresAt),
+            "Idempotency-Key",
+            UUID.randomUUID().toString());
+    assertThat(placed.statusCode()).isEqualTo(201);
+    UUID holdId = UUID.fromString(JSON.readTree(placed.body()).get("id").asString());
     String accountPath = "/v1/accounts/" + account;
     String transactionPath = "/v1/transactions/" + transaction;
     List<Endpoint> endpoints =
-        List.of(
-            new Endpoint("POST", "/v1/accounts", "{\"currency\":\"EUR\"}", "accounts:write", false),
-            new Endpoint("GET", accountPath, "", "accounts:read", false),
-            new Endpoint("GET", accountPath + "/balance", "", "accounts:read", false),
-            new Endpoint("GET", accountPath + "/entries", "", "accounts:read", false),
-            new Endpoint("POST", "/v1/accounts/" + frozen + "/freeze", "", "accounts:admin", false),
-            new Endpoint("POST", "/v1/accounts/" + closed + "/close", "", "accounts:admin", false),
-            new Endpoint("POST", "/v1/deposits", amount(account, 1), "money:write", true),
-            new Endpoint("POST", "/v1/withdrawals", amount(account, 1), "money:write", true),
-            new Endpoint(
-                "POST",
-                "/v1/transfers",
-                ("{\"source_account_id\":\"%s\",\"destination_account_id\":\"%s\","
-                        + "\"amount\":1,\"currency\":\"EUR\"}")
-                    .formatted(account, destination),
-                "money:write",
-                true),
-            new Endpoint("GET", transactionPath, "", "transactions:read", false),
-            new Endpoint(
-                "POST", transactionPath + "/reversal", "{}", "transactions:reverse", true));
+        new ArrayList<>(
+            List.of(
+                new Endpoint(
+                    "POST", "/v1/accounts", "{\"currency\":\"EUR\"}", "accounts:write", false),
+                new Endpoint("GET", accountPath, "", "accounts:read", false),
+                new Endpoint("GET", accountPath + "/balance", "", "accounts:read", false),
+                new Endpoint("GET", accountPath + "/entries", "", "accounts:read", false),
+                new Endpoint(
+                    "POST", "/v1/accounts/" + frozen + "/freeze", "", "accounts:admin", false),
+                new Endpoint(
+                    "POST", "/v1/accounts/" + closed + "/close", "", "accounts:admin", false),
+                new Endpoint("POST", "/v1/deposits", amount(account, 1), "money:write", true),
+                new Endpoint("POST", "/v1/withdrawals", amount(account, 1), "money:write", true),
+                new Endpoint(
+                    "POST",
+                    "/v1/transfers",
+                    ("{\"source_account_id\":\"%s\",\"destination_account_id\":\"%s\","
+                            + "\"amount\":1,\"currency\":\"EUR\"}")
+                        .formatted(account, destination),
+                    "money:write",
+                    true),
+                new Endpoint("GET", transactionPath, "", "transactions:read", false),
+                new Endpoint(
+                    "POST", transactionPath + "/reversal", "{}", "transactions:reverse", true)));
+    endpoints.add(
+        new Endpoint("POST", "/v1/holds", hold(account, 1, expiresAt), "holds:write", true));
+    endpoints.add(new Endpoint("GET", "/v1/holds/" + holdId, "", "holds:read", false));
+    endpoints.add(
+        new Endpoint(
+            "POST",
+            "/v1/holds/" + holdId + "/capture",
+            capture(1, destination),
+            "holds:write",
+            true));
+    endpoints.add(
+        new Endpoint("POST", "/v1/holds/" + holdId + "/release", "", "holds:write", true));
 
     int combinations = 0;
     for (Endpoint endpoint : endpoints) {
@@ -84,7 +113,7 @@ class ScopeMatrixIT extends LedgerIT {
         combinations++;
       }
     }
-    assertThat(combinations).isEqualTo(55);
+    assertThat(combinations).isEqualTo(75);
   }
 
   private UUID create() {
@@ -96,6 +125,15 @@ class ScopeMatrixIT extends LedgerIT {
 
   private static String amount(UUID account, long amount) {
     return "{\"account_id\":\"%s\",\"amount\":%d,\"currency\":\"EUR\"}".formatted(account, amount);
+  }
+
+  private static String hold(UUID account, long amount, Instant expiresAt) {
+    return ("{\"account_id\":\"%s\",\"amount\":%d,\"currency\":\"EUR\"," + "\"expires_at\":\"%s\"}")
+        .formatted(account, amount, expiresAt);
+  }
+
+  private static String capture(long amount, UUID destination) {
+    return "{\"amount\":%d,\"destination_account_id\":\"%s\"}".formatted(amount, destination);
   }
 
   private record Endpoint(

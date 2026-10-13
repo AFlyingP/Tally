@@ -8,6 +8,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -207,6 +209,40 @@ class StrategyContractIT extends LedgerIT {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"pessimistic", "optimistic", "serializable"})
+  void holdsBehaveIdentically(String strategy) throws Exception {
+    try (ConfigurableApplicationContext context = startStrategy(strategy)) {
+      UUID source = create(context);
+      UUID destination = create(context);
+      assertThat(deposit(context, source, 1000).statusCode()).isEqualTo(201);
+      Instant expiresAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.SECONDS);
+
+      HttpResponse<String> placed =
+          json(context, "/v1/holds", holdBody(source, 400, expiresAt), "Idempotency-Key", key());
+      assertThat(placed.statusCode()).isEqualTo(201);
+      UUID holdId = UUID.fromString(JSON.readTree(placed.body()).get("id").asString());
+
+      HttpResponse<String> overPlaced =
+          json(context, "/v1/holds", holdBody(source, 601, expiresAt), "Idempotency-Key", key());
+      assertError(overPlaced, 422, "INSUFFICIENT_FUNDS");
+
+      String captureBody =
+          "{\"amount\":250,\"destination_account_id\":\"%s\"}".formatted(destination);
+      HttpResponse<String> captured =
+          json(context, "/v1/holds/" + holdId + "/capture", captureBody, "Idempotency-Key", key());
+      assertThat(captured.statusCode()).isEqualTo(201);
+
+      HttpResponse<String> released =
+          json(context, "/v1/holds/" + holdId + "/release", "", "Idempotency-Key", key());
+      assertError(released, 422, "HOLD_NOT_ACTIVE");
+
+      assertThat(balance(source)).isEqualTo(750);
+      assertThat(heldBalance(source)).isZero();
+      assertThat(balance(destination)).isEqualTo(250);
+    }
+  }
+
   private ConfigurableApplicationContext startStrategy(String strategy) {
     return startApp(Map.of("tally.ledger.strategy", strategy));
   }
@@ -252,6 +288,18 @@ class StrategyContractIT extends LedgerIT {
     try (Connection db = appJdbc();
         PreparedStatement select =
             db.prepareStatement("SELECT balance FROM ledger.account WHERE id = ?")) {
+      select.setObject(1, account);
+      try (ResultSet row = select.executeQuery()) {
+        assertThat(row.next()).isTrue();
+        return row.getLong(1);
+      }
+    }
+  }
+
+  private long heldBalance(UUID account) throws Exception {
+    try (Connection db = appJdbc();
+        PreparedStatement select =
+            db.prepareStatement("SELECT held FROM ledger.account WHERE id = ?")) {
       select.setObject(1, account);
       try (ResultSet row = select.executeQuery()) {
         assertThat(row.next()).isTrue();
@@ -369,6 +417,11 @@ class StrategyContractIT extends LedgerIT {
     return "{\"source_account_id\":\"%s\",\"destination_account_id\":\"%s\","
         .concat("\"amount\":%d,\"currency\":\"EUR\"}")
         .formatted(source, destination, amount);
+  }
+
+  private static String holdBody(UUID account, long amount, Instant expiresAt) {
+    return ("{\"account_id\":\"%s\",\"amount\":%d,\"currency\":\"EUR\"," + "\"expires_at\":\"%s\"}")
+        .formatted(account, amount, expiresAt);
   }
 
   private static String key() {

@@ -100,6 +100,24 @@
         },
         "type" : "object"
       },
+      "Capture" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "destination_account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "amount",
+          "destination_account_id"
+        ],
+        "type" : "object"
+      },
       "CreateAccount" : {
         "properties" : {
           "currency" : {
@@ -190,6 +208,78 @@
             "type" : "string"
           }
         },
+        "type" : "object"
+      },
+      "Hold" : {
+        "properties" : {
+          "account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "capture_transaction_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "captured_amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "created_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "expires_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "state" : {
+            "enum" : [
+              "ACTIVE",
+              "CAPTURED",
+              "RELEASED",
+              "EXPIRED"
+            ],
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Place" : {
+        "properties" : {
+          "account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "amount" : {
+            "format" : "int64",
+            "minimum" : 1,
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "expires_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "account_id",
+          "amount",
+          "currency",
+          "expires_at"
+        ],
         "type" : "object"
       },
       "Ready" : {
@@ -413,7 +503,7 @@
     "/v1/accounts/{id}" : {
       "get" : {
         "description" : "scope: accounts:read",
-        "operationId" : "get_1",
+        "operationId" : "get_2",
         "parameters" : [
           {
             "in" : "path",
@@ -635,6 +725,169 @@
         },
         "tags" : [
           "money-controller"
+        ]
+      }
+    },
+    "/v1/holds" : {
+      "post" : {
+        "description" : "scope: holds:write",
+        "operationId" : "place",
+        "parameters" : [
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Place"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "hold-controller"
+        ]
+      }
+    },
+    "/v1/holds/{id}" : {
+      "get" : {
+        "description" : "scope: holds:read",
+        "operationId" : "get_1",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Hold"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "hold-controller"
+        ]
+      }
+    },
+    "/v1/holds/{id}/capture" : {
+      "post" : {
+        "description" : "scope: holds:write",
+        "operationId" : "capture",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Capture"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "hold-controller"
+        ]
+      }
+    },
+    "/v1/holds/{id}/release" : {
+      "post" : {
+        "description" : "scope: holds:write",
+        "operationId" : "release",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "hold-controller"
         ]
       }
     },
