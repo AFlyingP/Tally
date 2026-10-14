@@ -74,6 +74,8 @@ class ReadinessChecksIT {
         new LedgerProperties.Retry(10, 1, 200),
         new LedgerProperties.Idempotency(5000),
         10000,
-        new LedgerProperties.Expiry(5000));
+        new LedgerProperties.Expiry(5000),
+        "",
+        new LedgerProperties.Scheduler(1000, 3600000));
   }
 }

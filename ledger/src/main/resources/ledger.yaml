@@ -50,8 +50,12 @@ tally:
     idempotency:
       wait-ms: ${TALLY_IDEMPOTENCY_WAIT_MS:5000}
     lock-wait-ms: ${TALLY_LOCK_WAIT_MS:10000}
+    failpoint: ${TALLY_FAILPOINT:}
     expiry:
       poll-ms: ${TALLY_EXPIRY_POLL_MS:5000}
+    scheduler:
+      poll-ms: ${TALLY_SCHEDULER_POLL_MS:1000}
+      retry-interval-ms: ${TALLY_SCHEDULER_RETRY_INTERVAL_MS:3600000}
     kafka:
       bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}
       topic: ${TALLY_KAFKA_TOPIC:tally.transactions.v1}

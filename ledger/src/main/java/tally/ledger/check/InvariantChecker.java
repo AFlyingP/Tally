@@ -185,6 +185,42 @@ public class InvariantChecker {
       ORDER BY subject
       """;
 
+  private static final String I8 =
+      """
+      WITH duplicate_transactions AS (
+        SELECT transaction_id, count(*) AS total
+        FROM ledger.schedule_occurrence
+        WHERE transaction_id IS NOT NULL
+        GROUP BY transaction_id
+        HAVING count(*) > 1
+      )
+      SELECT 'schedule=' || schedule_id::text || ' date=' || occurrence_date::text AS subject,
+        'transactions=' || count(*)::text AS detail
+      FROM ledger.schedule_occurrence
+      GROUP BY schedule_id, occurrence_date
+      HAVING count(*) > 1
+      UNION ALL
+      SELECT 'occurrence=' || o.id::text, 'transactions=' || d.total::text
+      FROM ledger.schedule_occurrence o
+      JOIN duplicate_transactions d ON d.transaction_id = o.transaction_id
+      UNION ALL
+      SELECT 'occurrence=' || o.id::text, 'missing transaction'
+      FROM ledger.schedule_occurrence o
+      LEFT JOIN ledger.ledger_transaction t ON t.id = o.transaction_id
+      WHERE o.state = 'POSTED' AND t.id IS NULL
+      UNION ALL
+      SELECT 'schedule=' || o.schedule_id::text || ' date=' || o.occurrence_date::text,
+        'transactions=' || count(*)::text
+      FROM ledger.schedule_occurrence o
+      JOIN ledger.idempotency_key k
+        ON k.client_id = 'job:scheduler'
+        AND k.key = 'sched:' || o.schedule_id::text || ':' || o.occurrence_date::text
+      JOIN ledger.ledger_transaction t ON t.idempotency_key_id = k.id
+      GROUP BY o.schedule_id, o.occurrence_date
+      HAVING count(*) > 1
+      ORDER BY subject
+      """;
+
   public List<Violation> check(Connection connection) throws SQLException {
     connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
     connection.setReadOnly(true);
@@ -249,6 +285,11 @@ public class InvariantChecker {
             connection,
             I7,
             row -> new Violation("I7", "hold=" + row.getObject("id"), row.getString("detail"))));
+    violations.addAll(
+        read(
+            connection,
+            I8,
+            row -> new Violation("I8", row.getString("subject"), row.getString("detail"))));
     violations.addAll(
         read(
             connection,

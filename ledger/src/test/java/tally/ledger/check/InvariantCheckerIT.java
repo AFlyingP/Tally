@@ -271,6 +271,68 @@ class InvariantCheckerIT extends LedgerIT {
   }
 
   @Test
+  void detectsOccurrenceWithoutItsTransaction() throws Exception {
+    UUID source = createAccount();
+    UUID destination = createAccount();
+    Instant startAt =
+        java.time.Clock.systemUTC().instant().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
+    String body =
+        "{\"source_account_id\":\"%s\",\"destination_account_id\":\"%s\",\"amount\":10,\"currency\":\"EUR\",\"frequency\":\"ONCE\",\"start_at\":\"%s\"}"
+            .formatted(source, destination, startAt);
+    var response = post("/v1/schedules", token(Role.OPERATOR), body, "Idempotency-Key", key());
+    assertThat(response.statusCode()).isEqualTo(201);
+    UUID scheduleId = UUID.fromString(JSON.readTree(response.body()).get("id").asString());
+    UUID occurrenceId;
+    try (Connection db = superJdbc();
+        PreparedStatement select =
+            db.prepareStatement(
+                "SELECT id FROM ledger.schedule_occurrence WHERE schedule_id = ?")) {
+      select.setObject(1, scheduleId);
+      try (ResultSet row = select.executeQuery()) {
+        assertThat(row.next()).isTrue();
+        occurrenceId = row.getObject("id", UUID.class);
+      }
+    }
+    List<Violation> violations;
+    UUID missingTransaction = UUID.randomUUID();
+    try (Connection db = superJdbc();
+        Statement statement = db.createStatement()) {
+      statement.execute(
+          "ALTER TABLE ledger.schedule_occurrence"
+              + " DROP CONSTRAINT schedule_occurrence_transaction_id_fkey");
+      try {
+        try (PreparedStatement update =
+            db.prepareStatement(
+                "UPDATE ledger.schedule_occurrence SET state = 'POSTED', transaction_id = ?"
+                    + " WHERE id = ?")) {
+          update.setObject(1, missingTransaction);
+          update.setObject(2, occurrenceId);
+          assertThat(update.executeUpdate()).isEqualTo(1);
+        }
+        violations = check();
+      } finally {
+        try {
+          try (PreparedStatement update =
+              db.prepareStatement(
+                  "UPDATE ledger.schedule_occurrence SET state = 'PENDING', transaction_id = NULL"
+                      + " WHERE id = ?")) {
+            update.setObject(1, occurrenceId);
+            assertThat(update.executeUpdate()).isEqualTo(1);
+          }
+        } finally {
+          statement.execute(
+              "ALTER TABLE ledger.schedule_occurrence ADD CONSTRAINT"
+                  + " schedule_occurrence_transaction_id_fkey FOREIGN KEY (transaction_id)"
+                  + " REFERENCES ledger.ledger_transaction (id)");
+        }
+      }
+    }
+
+    assertThat(forSubject(violations, "I8", "occurrence=" + occurrenceId))
+        .containsExactly(new Violation("I8", "occurrence=" + occurrenceId, "missing transaction"));
+  }
+
+  @Test
   void commandPrintsViolationsAndExitsOne() throws Exception {
     UUID account = createAccount();
     long stored = storedBalance(account);

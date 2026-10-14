@@ -13,7 +13,9 @@ public record LedgerProperties(
     Retry retry,
     Idempotency idempotency,
     long lockWaitMs,
-    Expiry expiry) {
+    Expiry expiry,
+    String failpoint,
+    Scheduler scheduler) {
 
   public static final Set<String> KNOWN_ROLES =
       Set.of("api", "scheduler", "orchestrator", "relay", "expiry", "recon", "sealer");
@@ -36,6 +38,19 @@ public record LedgerProperties(
     public Expiry {
       if (pollMs < 50 || pollMs > 600000) {
         throw invalid("tally.ledger.expiry.poll-ms", "must be between 50 and 600000");
+      }
+    }
+  }
+
+  public record Scheduler(long pollMs, long retryIntervalMs) {
+
+    public Scheduler {
+      if (pollMs < 50 || pollMs > 600000) {
+        throw invalid("tally.ledger.scheduler.poll-ms", "must be between 50 and 600000");
+      }
+      if (retryIntervalMs < 100 || retryIntervalMs > 86400000) {
+        throw invalid(
+            "tally.ledger.scheduler.retry-interval-ms", "must be between 100 and 86400000");
       }
     }
   }
