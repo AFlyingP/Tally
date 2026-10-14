@@ -43,6 +43,16 @@ class ScopeMatrixIT extends LedgerIT {
             UUID.randomUUID().toString());
     assertThat(placed.statusCode()).isEqualTo(201);
     UUID holdId = UUID.fromString(JSON.readTree(placed.body()).get("id").asString());
+    Instant scheduleStart = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
+    HttpResponse<String> scheduled =
+        post(
+            "/v1/schedules",
+            token(Role.OPERATOR),
+            schedule(account, destination, scheduleStart),
+            "Idempotency-Key",
+            UUID.randomUUID().toString());
+    assertThat(scheduled.statusCode()).isEqualTo(201);
+    UUID scheduleId = UUID.fromString(JSON.readTree(scheduled.body()).get("id").asString());
     String accountPath = "/v1/accounts/" + account;
     String transactionPath = "/v1/transactions/" + transaction;
     List<Endpoint> endpoints =
@@ -82,6 +92,20 @@ class ScopeMatrixIT extends LedgerIT {
             true));
     endpoints.add(
         new Endpoint("POST", "/v1/holds/" + holdId + "/release", "", "holds:write", true));
+    endpoints.add(
+        new Endpoint(
+            "POST",
+            "/v1/schedules",
+            schedule(account, destination, scheduleStart),
+            "schedules:write",
+            true));
+    endpoints.add(new Endpoint("GET", "/v1/schedules/" + scheduleId, "", "schedules:read", false));
+    endpoints.add(
+        new Endpoint(
+            "GET", "/v1/schedules/" + scheduleId + "/occurrences", "", "schedules:read", false));
+    endpoints.add(
+        new Endpoint(
+            "POST", "/v1/schedules/" + scheduleId + "/cancel", "", "schedules:write", false));
 
     int combinations = 0;
     for (Endpoint endpoint : endpoints) {
@@ -113,7 +137,7 @@ class ScopeMatrixIT extends LedgerIT {
         combinations++;
       }
     }
-    assertThat(combinations).isEqualTo(75);
+    assertThat(combinations).isEqualTo(95);
   }
 
   private UUID create() {
@@ -134,6 +158,11 @@ class ScopeMatrixIT extends LedgerIT {
 
   private static String capture(long amount, UUID destination) {
     return "{\"amount\":%d,\"destination_account_id\":\"%s\"}".formatted(amount, destination);
+  }
+
+  private static String schedule(UUID source, UUID destination, Instant startAt) {
+    return "{\"source_account_id\":\"%s\",\"destination_account_id\":\"%s\",\"amount\":1,\"currency\":\"EUR\",\"frequency\":\"ONCE\",\"start_at\":\"%s\"}"
+        .formatted(source, destination, startAt);
   }
 
   private record Endpoint(

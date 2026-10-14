@@ -118,6 +118,52 @@
         ],
         "type" : "object"
       },
+      "Create" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "day_of_month" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "description" : {
+            "maxLength" : 200,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "destination_account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "end_date" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "frequency" : {
+            "enum" : [
+              "ONCE",
+              "DAILY",
+              "WEEKLY",
+              "MONTHLY"
+            ],
+            "type" : "string"
+          },
+          "source_account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "start_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "CreateAccount" : {
         "properties" : {
           "currency" : {
@@ -255,6 +301,52 @@
         },
         "type" : "object"
       },
+      "Occurrence" : {
+        "properties" : {
+          "attempts" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "due_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "next_attempt_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "occurrence_date" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "transaction_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "OccurrenceList" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/Occurrence"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
       "Place" : {
         "properties" : {
           "account_id" : {
@@ -301,6 +393,61 @@
           "reason" : {
             "maxLength" : 200,
             "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Schedule" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "created_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "day_of_month" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "destination_account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "end_date" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "frequency" : {
+            "enum" : [
+              "ONCE",
+              "DAILY",
+              "WEEKLY",
+              "MONTHLY"
+            ],
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "source_account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "start_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "status" : {
             "type" : "string"
           }
         },
@@ -472,7 +619,7 @@
     "/v1/accounts" : {
       "post" : {
         "description" : "scope: accounts:write",
-        "operationId" : "create",
+        "operationId" : "create_1",
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -503,7 +650,7 @@
     "/v1/accounts/{id}" : {
       "get" : {
         "description" : "scope: accounts:read",
-        "operationId" : "get_2",
+        "operationId" : "get_3",
         "parameters" : [
           {
             "in" : "path",
@@ -772,7 +919,7 @@
     "/v1/holds/{id}" : {
       "get" : {
         "description" : "scope: holds:read",
-        "operationId" : "get_1",
+        "operationId" : "get_2",
         "parameters" : [
           {
             "in" : "path",
@@ -888,6 +1035,153 @@
         },
         "tags" : [
           "hold-controller"
+        ]
+      }
+    },
+    "/v1/schedules" : {
+      "post" : {
+        "description" : "scope: schedules:write",
+        "operationId" : "create",
+        "parameters" : [
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Create"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "schedule-controller"
+        ]
+      }
+    },
+    "/v1/schedules/{id}" : {
+      "get" : {
+        "description" : "scope: schedules:read",
+        "operationId" : "get_1",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Schedule"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "schedule-controller"
+        ]
+      }
+    },
+    "/v1/schedules/{id}/cancel" : {
+      "post" : {
+        "description" : "scope: schedules:write",
+        "operationId" : "cancel",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Schedule"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "schedule-controller"
+        ]
+      }
+    },
+    "/v1/schedules/{id}/occurrences" : {
+      "get" : {
+        "description" : "scope: schedules:read",
+        "operationId" : "occurrences",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "limit",
+            "required" : false,
+            "schema" : {
+              "default" : 100,
+              "format" : "int32",
+              "type" : "integer"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/OccurrenceList"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "schedule-controller"
         ]
       }
     },
