@@ -37,3 +37,17 @@ tally:
   monitor:
     kafka:
       bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}
+      topic: ${TALLY_KAFKA_TOPIC:tally.transactions.v1}
+      group: ${TALLY_KAFKA_GROUP:tally-monitor}
+    r1:
+      max-count: ${TALLY_R1_MAX_COUNT:10}
+      window-seconds: ${TALLY_R1_WINDOW_SECONDS:600}
+    r2:
+      min-count: ${TALLY_R2_MIN_COUNT:3}
+      window-seconds: ${TALLY_R2_WINDOW_SECONDS:86400}
+      threshold: ${TALLY_R2_THRESHOLD:1000000}
+      lower-percent: ${TALLY_R2_LOWER_PERCENT:90}
+    r3:
+      percent: ${TALLY_R3_PERCENT:90}
+      window-seconds: ${TALLY_R3_WINDOW_SECONDS:1800}
+    case-join-seconds: ${TALLY_CASE_JOIN_SECONDS:86400}
