@@ -149,6 +149,29 @@ public class InvariantChecker {
       ORDER BY id, detail
       """;
 
+  private static final String I9 =
+      """
+      SELECT 'currency=' || a.currency AS subject,
+        'clearing=' || a.balance::text || ' unsettled=' || coalesce(sum(p.amount), 0)::text AS detail
+      FROM ledger.account a
+      LEFT JOIN ledger.external_payment p ON p.currency = a.currency
+        AND p.state IN ('CAPTURED','SUBMITTING','UNKNOWN','MANUAL_REVIEW')
+      WHERE a.kind = 'CLEARING'
+      GROUP BY a.id, a.currency, a.balance
+      HAVING a.balance <> coalesce(sum(p.amount), 0)
+      UNION ALL
+      SELECT 'payment=' || p.id::text, 'missing resolution transaction'
+      FROM ledger.external_payment p
+      LEFT JOIN ledger.ledger_transaction t ON t.id = p.resolution_transaction_id
+      WHERE p.state IN ('SETTLED','REJECTED_COMPENSATED') AND t.id IS NULL
+      UNION ALL
+      SELECT 'payment=' || p.id::text, 'missing hold'
+      FROM ledger.external_payment p
+      WHERE p.state IN ('HELD','CAPTURED','SUBMITTING','UNKNOWN',
+        'SETTLED','REJECTED_COMPENSATED','MANUAL_REVIEW') AND p.hold_id IS NULL
+      ORDER BY subject, detail
+      """;
+
   private static final String I10 =
       """
       SELECT 'transaction=' || t.id::text AS subject, 'missing event' AS detail
@@ -180,6 +203,11 @@ public class InvariantChecker {
       UNION ALL
       SELECT 'hold=' || e.hold_id::text, 'event=' || e.id::text || ' missing audit'
       FROM ledger.hold_event e
+      LEFT JOIN ledger.audit_log a ON a.id = e.audit_id
+      WHERE a.id IS NULL
+      UNION ALL
+      SELECT 'payment=' || e.payment_id::text, 'event=' || e.id::text || ' missing audit'
+      FROM ledger.payment_event e
       LEFT JOIN ledger.audit_log a ON a.id = e.audit_id
       WHERE a.id IS NULL
       ORDER BY subject
@@ -290,6 +318,11 @@ public class InvariantChecker {
             connection,
             I8,
             row -> new Violation("I8", row.getString("subject"), row.getString("detail"))));
+    violations.addAll(
+        read(
+            connection,
+            I9,
+            row -> new Violation("I9", row.getString("subject"), row.getString("detail"))));
     violations.addAll(
         read(
             connection,

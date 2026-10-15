@@ -56,6 +56,10 @@ tally:
     scheduler:
       poll-ms: ${TALLY_SCHEDULER_POLL_MS:1000}
       retry-interval-ms: ${TALLY_SCHEDULER_RETRY_INTERVAL_MS:3600000}
+    payments:
+      poll-ms: ${TALLY_PAYMENT_POLL_MS:500}
+      lease-ms: ${TALLY_PAYMENT_LEASE_MS:30000}
+      status-backoff-ms: ${TALLY_PAYMENT_STATUS_BACKOFF_MS:5000,10000,20000,40000,75000,120000,150000,180000}
     kafka:
       bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}
       topic: ${TALLY_KAFKA_TOPIC:tally.transactions.v1}

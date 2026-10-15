@@ -76,6 +76,41 @@ class InvariantCheckerIT extends LedgerIT {
   }
 
   @Test
+  void detectsClearingMismatch() throws Exception {
+    createAccount();
+    UUID clearing;
+    try (Connection db = appJdbc();
+        PreparedStatement select =
+            db.prepareStatement(
+                "SELECT id FROM ledger.account WHERE kind = 'CLEARING' AND currency = 'EUR'");
+        ResultSet row = select.executeQuery()) {
+      assertThat(row.next()).isTrue();
+      clearing = row.getObject("id", UUID.class);
+    }
+    long stored = storedBalance(clearing);
+    List<Violation> violations;
+    try (Connection db = superJdbc();
+        PreparedStatement update =
+            db.prepareStatement("UPDATE ledger.account SET balance = balance + 1 WHERE id = ?")) {
+      update.setObject(1, clearing);
+      assertThat(update.executeUpdate()).isEqualTo(1);
+      try {
+        violations = check();
+      } finally {
+        setBalance(db, clearing, stored);
+      }
+    }
+    assertThat(forSubject(violations, "I9", "currency=EUR"))
+        .containsExactly(
+            new Violation(
+                "I9", "currency=EUR", "clearing=" + (stored + 1) + " unsettled=" + stored));
+    assertThat(forSubject(violations, "I4", "account=" + clearing))
+        .containsExactly(
+            new Violation(
+                "I4", "account=" + clearing, "stored=" + (stored + 1) + " entries=" + stored));
+  }
+
+  @Test
   void detectsUnbalancedTransaction() throws Exception {
     UUID account = createAccount();
     UUID transaction = deposit(account, 100);

@@ -15,7 +15,8 @@ public record LedgerProperties(
     long lockWaitMs,
     Expiry expiry,
     String failpoint,
-    Scheduler scheduler) {
+    Scheduler scheduler,
+    Payments payments) {
 
   public static final Set<String> KNOWN_ROLES =
       Set.of("api", "scheduler", "orchestrator", "relay", "expiry", "recon", "sealer");
@@ -52,6 +53,32 @@ public record LedgerProperties(
         throw invalid(
             "tally.ledger.scheduler.retry-interval-ms", "must be between 100 and 86400000");
       }
+    }
+  }
+
+  public record Payments(long pollMs, long leaseMs, long[] statusBackoffMs) {
+
+    public Payments {
+      if (pollMs < 50 || pollMs > 600000) {
+        throw invalid("tally.ledger.payments.poll-ms", "must be between 50 and 600000");
+      }
+      if (leaseMs < 1000 || leaseMs > 600000) {
+        throw invalid("tally.ledger.payments.lease-ms", "must be between 1000 and 600000");
+      }
+      if (statusBackoffMs == null || statusBackoffMs.length != 8) {
+        throw invalid("tally.ledger.payments.status-backoff-ms", "must contain exactly 8 items");
+      }
+      for (long delay : statusBackoffMs) {
+        if (delay < 10 || delay > 600000) {
+          throw invalid("tally.ledger.payments.status-backoff-ms", "must be between 10 and 600000");
+        }
+      }
+      statusBackoffMs = statusBackoffMs.clone();
+    }
+
+    @Override
+    public long[] statusBackoffMs() {
+      return statusBackoffMs.clone();
     }
   }
 
