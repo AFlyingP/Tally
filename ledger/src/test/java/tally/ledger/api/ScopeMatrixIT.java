@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import tally.ledger.testing.LedgerIT;
@@ -62,6 +63,16 @@ class ScopeMatrixIT extends LedgerIT {
             UUID.randomUUID().toString());
     assertThat(createdPayment.statusCode()).isEqualTo(202);
     UUID paymentId = UUID.fromString(JSON.readTree(createdPayment.body()).get("id").asString());
+    String reconBody =
+        JSON.writeValueAsString(
+            Map.of(
+                "business_date",
+                "2026-02-01",
+                "statement_csv",
+                "reference,creditor_account,amount,currency,value_date\n"));
+    HttpResponse<String> reconciled = post("/v1/reconciliation/runs", token(Role.ADMIN), reconBody);
+    assertThat(reconciled.statusCode()).isIn(200, 201);
+    UUID runId = UUID.fromString(JSON.readTree(reconciled.body()).get("id").asString());
     String accountPath = "/v1/accounts/" + account;
     String transactionPath = "/v1/transactions/" + transaction;
     List<Endpoint> endpoints =
@@ -119,6 +130,11 @@ class ScopeMatrixIT extends LedgerIT {
         new Endpoint("POST", "/v1/external-payments", payment(account), "payments:write", true));
     endpoints.add(
         new Endpoint("GET", "/v1/external-payments/" + paymentId, "", "payments:read", false));
+    endpoints.add(new Endpoint("POST", "/v1/reconciliation/runs", reconBody, "recon:run", false));
+    endpoints.add(
+        new Endpoint(
+            "GET", "/v1/reconciliation/runs?business_date=2026-02-01", "", "recon:read", false));
+    endpoints.add(new Endpoint("GET", "/v1/reconciliation/runs/" + runId, "", "recon:read", false));
 
     int combinations = 0;
     for (Endpoint endpoint : endpoints) {
@@ -150,7 +166,7 @@ class ScopeMatrixIT extends LedgerIT {
         combinations++;
       }
     }
-    assertThat(combinations).isEqualTo(105);
+    assertThat(combinations).isEqualTo(120);
   }
 
   private UUID create() {

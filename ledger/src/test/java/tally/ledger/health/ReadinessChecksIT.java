@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.LocalTime;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -104,6 +105,7 @@ class ReadinessChecksIT {
         new LedgerProperties.Scheduler(1000, 3600000),
         new LedgerProperties.Payments(
             500, 30000, new long[] {5000, 10000, 20000, 40000, 75000, 120000, 150000, 180000}),
-        new LedgerProperties.Relay(200, 500));
+        new LedgerProperties.Relay(200, 500),
+        new LedgerProperties.Recon(LocalTime.of(0, 30)));
   }
 }

@@ -468,11 +468,128 @@
         },
         "type" : "object"
       },
+      "ReconBreak" : {
+        "properties" : {
+          "ledger_amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "ledger_currency" : {
+            "type" : "string"
+          },
+          "ledger_date" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "line_number" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "statement_amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "statement_currency" : {
+            "type" : "string"
+          },
+          "statement_date" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "type" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ReconRun" : {
+        "properties" : {
+          "break_count" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "breaks" : {
+            "items" : {
+              "$ref" : "#/components/schemas/ReconBreak"
+            },
+            "type" : "array"
+          },
+          "business_date" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "failure_line" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "failure_reason" : {
+            "type" : "string"
+          },
+          "finished_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "ledger_payments" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "matched" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "previous_run_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "started_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "statement_lines" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "status" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "ReconRunList" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/ReconRun"
+            },
+            "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
       "Reversal" : {
         "properties" : {
           "reason" : {
             "maxLength" : 200,
             "minLength" : 0,
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "Run" : {
+        "properties" : {
+          "business_date" : {
+            "format" : "date",
+            "type" : "string"
+          },
+          "statement_csv" : {
             "type" : "string"
           }
         },
@@ -730,7 +847,7 @@
     "/v1/accounts/{id}" : {
       "get" : {
         "description" : "scope: accounts:read",
-        "operationId" : "get_4",
+        "operationId" : "get_5",
         "parameters" : [
           {
             "in" : "path",
@@ -999,7 +1116,7 @@
     "/v1/external-payments/{id}" : {
       "get" : {
         "description" : "scope: payments:read",
-        "operationId" : "get_3",
+        "operationId" : "get_4",
         "parameters" : [
           {
             "in" : "path",
@@ -1072,7 +1189,7 @@
     "/v1/holds/{id}" : {
       "get" : {
         "description" : "scope: holds:read",
-        "operationId" : "get_2",
+        "operationId" : "get_3",
         "parameters" : [
           {
             "in" : "path",
@@ -1188,6 +1305,99 @@
         },
         "tags" : [
           "hold-controller"
+        ]
+      }
+    },
+    "/v1/reconciliation/runs" : {
+      "get" : {
+        "description" : "scope: recon:read",
+        "operationId" : "byDate",
+        "parameters" : [
+          {
+            "in" : "query",
+            "name" : "business_date",
+            "required" : true,
+            "schema" : {
+              "format" : "date",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ReconRunList"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "recon-controller"
+        ]
+      },
+      "post" : {
+        "description" : "scope: recon:run",
+        "operationId" : "run",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Run"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ReconRun"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "recon-controller"
+        ]
+      }
+    },
+    "/v1/reconciliation/runs/{id}" : {
+      "get" : {
+        "description" : "scope: recon:read",
+        "operationId" : "get_2",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ReconRun"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "recon-controller"
         ]
       }
     },

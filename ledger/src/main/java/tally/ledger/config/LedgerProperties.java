@@ -1,5 +1,6 @@
 package tally.ledger.config;
 
+import java.time.LocalTime;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -17,7 +18,8 @@ public record LedgerProperties(
     String failpoint,
     Scheduler scheduler,
     Payments payments,
-    Relay relay) {
+    Relay relay,
+    Recon recon) {
 
   public static final Set<String> KNOWN_ROLES =
       Set.of("api", "scheduler", "orchestrator", "relay", "expiry", "recon", "sealer");
@@ -91,6 +93,15 @@ public record LedgerProperties(
       }
       if (batch < 1 || batch > 5000) {
         throw invalid("tally.ledger.relay.batch", "must be between 1 and 5000");
+      }
+    }
+  }
+
+  public record Recon(LocalTime timeUtc) {
+
+    public Recon {
+      if (timeUtc == null || timeUtc.getSecond() != 0 || timeUtc.getNano() != 0) {
+        throw invalid("tally.ledger.recon.time-utc", "must be a valid HH:mm time");
       }
     }
   }

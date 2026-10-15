@@ -66,6 +66,8 @@ tally:
     relay:
       poll-ms: ${TALLY_RELAY_POLL_MS:200}
       batch: ${TALLY_RELAY_BATCH:500}
+    recon:
+      time-utc: ${TALLY_RECON_TIME_UTC:00:30}
     extbank:
       url: ${TALLY_EXTBANK_URL:http://extbank:8083}
       timeout-ms: ${TALLY_EXTBANK_TIMEOUT_MS:2000}

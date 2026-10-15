@@ -1,13 +1,17 @@
 package tally.ledger.payments;
 
 import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Map;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import tally.ledger.config.LedgerProperties;
+import tally.platform.error.ApiException;
+import tally.platform.error.ErrorCode;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -31,6 +35,7 @@ public class ExtbankClient {
   public record Unknown(String cause) implements SubmitResult, StatusResult {}
 
   private final RestClient client;
+  private final RestClient statementClient;
   private final JsonMapper mapper;
   private final String apiKey;
 
@@ -45,6 +50,35 @@ public class ExtbankClient {
             .baseUrl(properties.extbank().url())
             .requestFactory(requestFactory)
             .build();
+    JdkClientHttpRequestFactory statementFactory = new JdkClientHttpRequestFactory(httpClient);
+    statementFactory.setReadTimeout(Duration.ofMillis(30000));
+    this.statementClient =
+        RestClient.builder()
+            .baseUrl(properties.extbank().url())
+            .requestFactory(statementFactory)
+            .build();
+  }
+
+  public String statement(LocalDate date, String requestId) {
+    try {
+      return statementClient
+          .get()
+          .uri("/statements/{date}", date)
+          .header("X-Api-Key", apiKey)
+          .header("X-Request-Id", requestId)
+          .exchange(
+              (request, response) -> {
+                int status = response.getStatusCode().value();
+                if (status != 200) {
+                  throw new ApiException(
+                      ErrorCode.STATEMENT_UNAVAILABLE, "statement fetch failed: http " + status);
+                }
+                return new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8);
+              });
+    } catch (RestClientException exception) {
+      throw new ApiException(
+          ErrorCode.STATEMENT_UNAVAILABLE, "statement fetch failed: " + exception.getMessage());
+    }
   }
 
   public SubmitResult submit(
