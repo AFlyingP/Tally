@@ -20,6 +20,10 @@ server:
   port: ${SERVER_PORT:8083}
   shutdown: graceful
 
+tally:
+  extbank:
+    api-key: ${EXTBANK_API_KEY:}
+
 logging:
   structured:
     format:

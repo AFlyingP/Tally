@@ -28,7 +28,8 @@ class ExtbankStartIT {
               .run(
                   "--server.port=0",
                   "--spring.datasource.url=" + postgres.getJdbcUrl(),
-                  "--spring.datasource.password=" + PASSWORD)) {
+                  "--spring.datasource.password=" + PASSWORD,
+                  "--tally.extbank.api-key=" + "k".repeat(48))) {
         String port = app.getEnvironment().getProperty("local.server.port");
         HttpResponse<String> ready =
             HttpClient.newHttpClient()
