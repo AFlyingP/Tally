@@ -1,0 +1,10 @@
+package tally.ledger.core;
+
+public enum BreakType {
+  MISSING_IN_LEDGER,
+  MISSING_IN_STATEMENT,
+  AMOUNT_MISMATCH,
+  CURRENCY_MISMATCH,
+  DATE_MISMATCH,
+  DUPLICATE_IN_STATEMENT
+}
