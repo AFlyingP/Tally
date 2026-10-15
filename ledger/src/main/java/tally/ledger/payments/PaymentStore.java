@@ -204,18 +204,18 @@ public class PaymentStore {
     }
   }
 
-  public void schedule(
+  public boolean schedule(
       Connection connection, UUID id, int statusAttempts, Instant nextAttemptAt, Instant now)
       throws SQLException {
     String sql =
         "UPDATE ledger.external_payment SET status_attempts = ?, next_attempt_at = ?, updated_at = ?"
-            + " WHERE id = ?";
+            + " WHERE id = ? AND state = 'UNKNOWN'";
     try (PreparedStatement update = connection.prepareStatement(sql)) {
       update.setInt(1, statusAttempts);
       update.setObject(2, time(nextAttemptAt));
       update.setObject(3, time(now));
       update.setObject(4, id);
-      update.executeUpdate();
+      return update.executeUpdate() == 1;
     }
   }
 

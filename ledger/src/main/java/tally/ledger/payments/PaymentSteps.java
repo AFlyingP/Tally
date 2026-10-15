@@ -156,7 +156,9 @@ public class PaymentSteps {
       return execute(
           payment,
           tx -> {
-            payments.schedule(tx.connection(), payment.id(), attempts, nextAttemptAt, now());
+            if (!payments.schedule(tx.connection(), payment.id(), attempts, nextAttemptAt, now())) {
+              throw new Stale();
+            }
             return replay(tx.connection(), payment);
           });
     }

@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -329,6 +330,29 @@ class PaymentOrchestratorIT extends LedgerIT {
     assertThat(steps.settle(submitting, date).orElseThrow().resolutionTransactionId())
         .isEqualTo(settled.resolutionTransactionId());
     assertThat(transactions(payment, "EXTERNAL_SETTLEMENT")).isEqualTo(1);
+  }
+
+  @Test
+  void staleStatusRescheduleDoesNotChangeSettledPayment() throws Exception {
+    PaymentRow payment = payment(context, 1000);
+    PaymentRow held = steps.hold(payment).orElseThrow();
+    PaymentRow captured = steps.capture(held).orElseThrow();
+    PaymentRow submitting = steps.markSubmitting(captured).orElseThrow();
+    Instant nextAttemptAt = clock.instant().truncatedTo(ChronoUnit.MICROS).plusSeconds(5);
+    PaymentRow unknown = steps.markUnknown(submitting, 1, nextAttemptAt, "timeout").orElseThrow();
+    PaymentRow settled =
+        steps.settle(unknown, LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC)).orElseThrow();
+    assertThat(settled.state()).isEqualTo(PaymentState.SETTLED);
+    clock.advance(Duration.ofSeconds(1));
+
+    assertThat(steps.markUnknown(unknown, 2, nextAttemptAt.plusSeconds(10), "status still unknown"))
+        .isEmpty();
+
+    PaymentRow current = row(payment);
+    assertThat(current.state()).isEqualTo(PaymentState.SETTLED);
+    assertThat(current.statusAttempts()).isEqualTo(settled.statusAttempts());
+    assertThat(current.nextAttemptAt()).isEqualTo(settled.nextAttemptAt());
+    assertThat(current.updatedAt()).isEqualTo(settled.updatedAt());
   }
 
   @Test
