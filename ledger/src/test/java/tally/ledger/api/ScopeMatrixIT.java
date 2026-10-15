@@ -53,6 +53,15 @@ class ScopeMatrixIT extends LedgerIT {
             UUID.randomUUID().toString());
     assertThat(scheduled.statusCode()).isEqualTo(201);
     UUID scheduleId = UUID.fromString(JSON.readTree(scheduled.body()).get("id").asString());
+    HttpResponse<String> createdPayment =
+        post(
+            "/v1/external-payments",
+            token(Role.OPERATOR),
+            payment(account),
+            "Idempotency-Key",
+            UUID.randomUUID().toString());
+    assertThat(createdPayment.statusCode()).isEqualTo(202);
+    UUID paymentId = UUID.fromString(JSON.readTree(createdPayment.body()).get("id").asString());
     String accountPath = "/v1/accounts/" + account;
     String transactionPath = "/v1/transactions/" + transaction;
     List<Endpoint> endpoints =
@@ -106,6 +115,10 @@ class ScopeMatrixIT extends LedgerIT {
     endpoints.add(
         new Endpoint(
             "POST", "/v1/schedules/" + scheduleId + "/cancel", "", "schedules:write", false));
+    endpoints.add(
+        new Endpoint("POST", "/v1/external-payments", payment(account), "payments:write", true));
+    endpoints.add(
+        new Endpoint("GET", "/v1/external-payments/" + paymentId, "", "payments:read", false));
 
     int combinations = 0;
     for (Endpoint endpoint : endpoints) {
@@ -137,7 +150,7 @@ class ScopeMatrixIT extends LedgerIT {
         combinations++;
       }
     }
-    assertThat(combinations).isEqualTo(95);
+    assertThat(combinations).isEqualTo(105);
   }
 
   private UUID create() {
@@ -163,6 +176,11 @@ class ScopeMatrixIT extends LedgerIT {
   private static String schedule(UUID source, UUID destination, Instant startAt) {
     return "{\"source_account_id\":\"%s\",\"destination_account_id\":\"%s\",\"amount\":1,\"currency\":\"EUR\",\"frequency\":\"ONCE\",\"start_at\":\"%s\"}"
         .formatted(source, destination, startAt);
+  }
+
+  private static String payment(UUID source) {
+    return "{\"source_account_id\":\"%s\",\"amount\":1,\"currency\":\"EUR\",\"creditor_account\":\"DEMO-OK\"}"
+        .formatted(source);
   }
 
   private record Endpoint(

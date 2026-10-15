@@ -248,6 +248,24 @@
         },
         "type" : "object"
       },
+      "Event" : {
+        "properties" : {
+          "detail" : {
+            "type" : "string"
+          },
+          "from_state" : {
+            "type" : "string"
+          },
+          "occurred_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "to_state" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Health" : {
         "properties" : {
           "status" : {
@@ -343,6 +361,68 @@
               "$ref" : "#/components/schemas/Occurrence"
             },
             "type" : "array"
+          }
+        },
+        "type" : "object"
+      },
+      "Payment" : {
+        "properties" : {
+          "amount" : {
+            "format" : "int64",
+            "type" : "integer"
+          },
+          "capture_transaction_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "created_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "creditor_account" : {
+            "type" : "string"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "events" : {
+            "items" : {
+              "$ref" : "#/components/schemas/Event"
+            },
+            "type" : "array"
+          },
+          "external_reference" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "resolution_transaction_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "source_account_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "status_attempts" : {
+            "format" : "int32",
+            "type" : "integer"
+          },
+          "updated_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "value_date" : {
+            "format" : "date",
+            "type" : "string"
           }
         },
         "type" : "object"
@@ -619,7 +699,7 @@
     "/v1/accounts" : {
       "post" : {
         "description" : "scope: accounts:write",
-        "operationId" : "create_1",
+        "operationId" : "create_2",
         "requestBody" : {
           "content" : {
             "application/json" : {
@@ -650,7 +730,7 @@
     "/v1/accounts/{id}" : {
       "get" : {
         "description" : "scope: accounts:read",
-        "operationId" : "get_3",
+        "operationId" : "get_4",
         "parameters" : [
           {
             "in" : "path",
@@ -872,6 +952,79 @@
         },
         "tags" : [
           "money-controller"
+        ]
+      }
+    },
+    "/v1/external-payments" : {
+      "post" : {
+        "description" : "scope: payments:write",
+        "operationId" : "create_1",
+        "parameters" : [
+          {
+            "in" : "header",
+            "name" : "Idempotency-Key",
+            "required" : true,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/Create"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "payment-controller"
+        ]
+      }
+    },
+    "/v1/external-payments/{id}" : {
+      "get" : {
+        "description" : "scope: payments:read",
+        "operationId" : "get_3",
+        "parameters" : [
+          {
+            "in" : "path",
+            "name" : "id",
+            "required" : true,
+            "schema" : {
+              "format" : "uuid",
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Payment"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "payment-controller"
         ]
       }
     },

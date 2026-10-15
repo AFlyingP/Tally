@@ -63,6 +63,22 @@ class AccountStatusIT extends LedgerIT {
   }
 
   @Test
+  void closeIsBlockedByOpenPayment() throws Exception {
+    UUID account = create();
+    HttpResponse<String> payment =
+        post(
+            "/v1/external-payments",
+            token(Role.OPERATOR),
+            "{\"source_account_id\":\"%s\",\"amount\":1,\"currency\":\"EUR\",\"creditor_account\":\"DEMO-OK\"}"
+                .formatted(account),
+            "Idempotency-Key",
+            UUID.randomUUID().toString());
+    assertThat(payment.statusCode()).isEqualTo(202);
+
+    assertError(close(account), 422, "ACCOUNT_NOT_EMPTY");
+  }
+
+  @Test
   void closedAccountRejectsEverything() throws Exception {
     UUID account = create();
     assertThat(close(account).statusCode()).isEqualTo(200);

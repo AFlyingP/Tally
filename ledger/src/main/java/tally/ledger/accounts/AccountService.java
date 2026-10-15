@@ -23,6 +23,7 @@ import tally.ledger.core.AccountKind;
 import tally.ledger.core.AccountState;
 import tally.ledger.core.AccountStatus;
 import tally.ledger.core.Side;
+import tally.ledger.payments.PaymentStore;
 import tally.ledger.posting.RetryableConflict;
 import tally.ledger.posting.StrategyRunner;
 import tally.ledger.store.AccountStore;
@@ -48,6 +49,7 @@ public class AccountService {
   private final AuditWriter audit;
   private final Clock clock;
   private final StrategyRunner runner;
+  private final PaymentStore payments;
 
   public AccountService(
       DataSource dataSource,
@@ -55,13 +57,15 @@ public class AccountService {
       EntryStore entries,
       AuditWriter audit,
       Clock clock,
-      StrategyRunner runner) {
+      StrategyRunner runner,
+      PaymentStore payments) {
     this.dataSource = dataSource;
     this.accounts = accounts;
     this.entries = entries;
     this.audit = audit;
     this.clock = clock;
     this.runner = runner;
+    this.payments = payments;
   }
 
   /** Creates a customer account, the internal accounts of its currency, and the audit row. */
@@ -153,6 +157,9 @@ public class AccountService {
                   throw new ApiException(ErrorCode.ACCOUNT_CLOSED, "account is closed");
                 }
                 if (account.balance() != 0 || account.held() != 0) {
+                  throw new ApiException(ErrorCode.ACCOUNT_NOT_EMPTY, "account is not empty");
+                }
+                if (payments.hasOpenForAccount(tx.connection(), id)) {
                   throw new ApiException(ErrorCode.ACCOUNT_NOT_EMPTY, "account is not empty");
                 }
               }
