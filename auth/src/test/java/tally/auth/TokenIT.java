@@ -8,11 +8,13 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import java.io.IOException;
+import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -22,6 +24,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
@@ -39,6 +42,8 @@ class TokenIT {
 
   private static PostgreSQLContainer postgres;
   private static ConfigurableApplicationContext app;
+  @TempDir static Path tempDir;
+  private static int port;
 
   @BeforeAll
   static void start() {
@@ -56,17 +61,24 @@ class TokenIT {
                 MountableFile.forHostPath("../deploy/postgres/init.sh", 0755),
                 "/docker-entrypoint-initdb.d/init.sh");
     postgres.start();
+    port = freePort();
+    app = startApp();
+  }
+
+  private static ConfigurableApplicationContext startApp() {
     List<String> args = new ArrayList<>();
-    args.add("--server.port=0");
+    args.add("--server.port=" + port);
     args.add("--spring.datasource.url=" + postgres.getJdbcUrl());
     args.add("--spring.datasource.password=" + PASSWORD);
     args.add("--tally.auth.issuer=" + ISSUER);
+    args.add("--tally.auth.jwks-uri=http://localhost:" + port + "/oauth2/jwks");
+    args.add("--tally.auth.key-path=" + tempDir.resolve("signing-key.pem"));
     for (Role role : Role.values()) {
       String key = "--tally.auth.clients." + role.wireName();
       args.add(key + ".id=" + clientId(role));
       args.add(key + ".secret=" + secret(role));
     }
-    app = AuthApplication.builder().run(args.toArray(String[]::new));
+    return AuthApplication.builder().run(args.toArray(String[]::new));
   }
 
   @AfterAll
@@ -118,6 +130,24 @@ class TokenIT {
     assertThat(key.getKeyUse().identifier()).isEqualTo("sig");
     assertThat(key.getAlgorithm().getName()).isEqualTo("RS256");
     assertThat(key.isPrivate()).isFalse();
+    assertThat(jwt.verify(new RSASSAVerifier(key))).isTrue();
+  }
+
+  @Test
+  void keyAndTokensSurviveRestart() throws Exception {
+    HttpResponse<String> response =
+        tokenRequest(Role.OPERATOR, secret(Role.OPERATOR), "client_credentials");
+    SignedJWT jwt = SignedJWT.parse(JSON.readTree(response.body()).get("access_token").asString());
+    String originalKid = jwt.getHeader().getKeyID();
+    app.close();
+    app = startApp();
+
+    HttpResponse<String> jwks = send(HttpRequest.newBuilder(uri("/oauth2/jwks")).GET());
+    assertThat(jwks.statusCode()).isEqualTo(200);
+    JWKSet keys = JWKSet.parse(jwks.body());
+    assertThat(keys.getKeys()).hasSize(1);
+    RSAKey key = (RSAKey) keys.getKeyByKeyId(originalKid);
+    assertThat(key.getKeyID()).isEqualTo(originalKid);
     assertThat(jwt.verify(new RSASSAVerifier(key))).isTrue();
   }
 
@@ -187,5 +217,13 @@ class TokenIT {
 
   private static String secret(Role role) {
     return "test-secret-for-" + role.wireName() + "-0123456789abcdef";
+  }
+
+  private static int freePort() {
+    try (ServerSocket socket = new ServerSocket(0)) {
+      return socket.getLocalPort();
+    } catch (IOException e) {
+      throw new IllegalStateException(e);
+    }
   }
 }

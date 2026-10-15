@@ -1,5 +1,7 @@
 package tally.auth;
 
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import tally.platform.security.Role;
@@ -20,6 +22,11 @@ public record AuthProperties(
     }
     if (keyPath == null || keyPath.isBlank()) {
       throw invalid("tally.auth.key-path", "must not be empty");
+    }
+    try {
+      Path.of(keyPath);
+    } catch (InvalidPathException e) {
+      throw invalid("tally.auth.key-path", "must be a valid path");
     }
     for (Role role : Role.values()) {
       String key = "tally.auth.clients." + role.wireName();

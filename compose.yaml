@@ -72,6 +72,7 @@ services:
       TALLY_DB_PASSWORD: ${AUTH_DB_PASSWORD}
       JAVA_TOOL_OPTIONS: -Xmx256m
     ports: ["8081:8081"]
+    volumes: ["tally_auth_keys:/var/lib/tally-auth"]
     depends_on:
       postgres: { condition: service_healthy }
     mem_limit: 512m
