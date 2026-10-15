@@ -15,12 +15,15 @@ public record Sizes(
     int loadSeconds,
     List<Integer> loadClients,
     List<String> loadWorkloads,
-    int loadRuns) {
+    int loadRuns,
+    int reconBreaksPerType,
+    int reconCleanFiles) {
 
   public static Sizes current() {
     String size = System.getProperty("proof.size", "ci");
     return switch (size) {
-      case "ci" -> new Sizes(40, 20_000, 32, 6, 8, 1, 50, 30, 10, 5, List.of(8), List.of("hot"), 1);
+      case "ci" ->
+          new Sizes(40, 20_000, 32, 6, 8, 1, 50, 30, 10, 5, List.of(8), List.of("hot"), 1, 10, 4);
       case "eval" ->
           new Sizes(
               100,
@@ -35,7 +38,9 @@ public record Sizes(
               30,
               List.of(8, 32, 128),
               List.of("uniform", "hot"),
-              5);
+              5,
+              50,
+              20);
       default -> throw new IllegalArgumentException("unknown proof size: " + size);
     };
   }

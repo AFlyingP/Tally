@@ -3,6 +3,7 @@ package tally.proof.harness;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -195,6 +196,18 @@ public final class LedgerClient {
 
   public Http.Response payment(UUID payment) {
     return Http.get(baseUrl + "/v1/external-payments/" + payment, token);
+  }
+
+  public Http.Response runReconciliation(LocalDate date, String csvOrNull) {
+    Map<String, String> body =
+        csvOrNull == null
+            ? Map.of("business_date", date.toString())
+            : Map.of("business_date", date.toString(), "statement_csv", csvOrNull);
+    return Http.post(baseUrl + "/v1/reconciliation/runs", token, JSON.writeValueAsString(body));
+  }
+
+  public Http.Response reconRun(UUID id) {
+    return Http.get(baseUrl + "/v1/reconciliation/runs/" + id, token);
   }
 
   public static String errorCode(Http.Response response) {
