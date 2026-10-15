@@ -16,7 +16,8 @@ public record LedgerProperties(
     Expiry expiry,
     String failpoint,
     Scheduler scheduler,
-    Payments payments) {
+    Payments payments,
+    Relay relay) {
 
   public static final Set<String> KNOWN_ROLES =
       Set.of("api", "scheduler", "orchestrator", "relay", "expiry", "recon", "sealer");
@@ -79,6 +80,18 @@ public record LedgerProperties(
     @Override
     public long[] statusBackoffMs() {
       return statusBackoffMs.clone();
+    }
+  }
+
+  public record Relay(long pollMs, int batch) {
+
+    public Relay {
+      if (pollMs < 20 || pollMs > 60000) {
+        throw invalid("tally.ledger.relay.poll-ms", "must be between 20 and 60000");
+      }
+      if (batch < 1 || batch > 5000) {
+        throw invalid("tally.ledger.relay.batch", "must be between 1 and 5000");
+      }
     }
   }
 

@@ -63,6 +63,9 @@ tally:
     kafka:
       bootstrap: ${TALLY_KAFKA_BOOTSTRAP:kafka:9092}
       topic: ${TALLY_KAFKA_TOPIC:tally.transactions.v1}
+    relay:
+      poll-ms: ${TALLY_RELAY_POLL_MS:200}
+      batch: ${TALLY_RELAY_BATCH:500}
     extbank:
       url: ${TALLY_EXTBANK_URL:http://extbank:8083}
       timeout-ms: ${TALLY_EXTBANK_TIMEOUT_MS:2000}

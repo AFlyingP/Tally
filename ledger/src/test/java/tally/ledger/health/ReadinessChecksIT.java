@@ -103,6 +103,7 @@ class ReadinessChecksIT {
         "",
         new LedgerProperties.Scheduler(1000, 3600000),
         new LedgerProperties.Payments(
-            500, 30000, new long[] {5000, 10000, 20000, 40000, 75000, 120000, 150000, 180000}));
+            500, 30000, new long[] {5000, 10000, 20000, 40000, 75000, 120000, 150000, 180000}),
+        new LedgerProperties.Relay(200, 500));
   }
 }
