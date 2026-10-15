@@ -36,6 +36,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.awaitility.core.ConditionTimeoutException;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.Testcontainers;
@@ -43,10 +45,13 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.containers.wait.strategy.WaitStrategy;
+import org.testcontainers.containers.wait.strategy.WaitStrategyTarget;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.toxiproxy.ToxiproxyContainer;
 import org.testcontainers.utility.MountableFile;
 import tally.ledger.check.InvariantChecker;
+import tally.ledger.check.TopicCheck;
 import tally.ledger.check.Violation;
 import tally.platform.testing.TestIssuer;
 import tools.jackson.databind.JsonNode;
@@ -58,22 +63,34 @@ public final class FaultStack implements AutoCloseable {
   public enum Part {
     POSTGRES,
     TOXIPROXY,
-    LEDGER
+    LEDGER,
+    KAFKA,
+    EXTBANK,
+    WORKER,
+    WORKER2
   }
 
   private static final String PASSWORD = "test-password";
   private static final String LEDGER_IMAGE = "tally/ledger:dev";
+  private static final String EXTBANK_IMAGE = "tally/extbank:dev";
+  private static final String KAFKA_IMAGE = "apache/kafka:4.2.2";
+  private static final String API_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef";
   private static final Duration READY_TIMEOUT = Duration.ofSeconds(120);
   private static final long POSTGRES_MEMORY_MB = 1024;
   private static final long TOXIPROXY_MEMORY_MB = 128;
   private static final long LEDGER_MEMORY_MB = 1024;
+  private static final long KAFKA_MEMORY_MB = 1024;
+  private static final long EXTBANK_MEMORY_MB = 384;
+  private static final long WORKER_MEMORY_MB = 768;
   private static final long K6_MEMORY_MB = 512;
+  private static final Logger LOGGER = Logger.getLogger(FaultStack.class.getName());
 
   private final DockerClient dockerClient;
   private final Network network;
   private final TestIssuer issuer;
   private final HttpClient http;
   private final Map<Part, Integer> ports;
+  private final Map<Part, ServerSocket> reservations;
   private final Map<Part, GenericContainer<?>> containers = new EnumMap<>(Part.class);
   private final Map<Part, Map<String, String>> env = new EnumMap<>(Part.class);
   private final Set<Part> changed = EnumSet.noneOf(Part.class);
@@ -82,12 +99,14 @@ public final class FaultStack implements AutoCloseable {
 
   private FaultStack(String strategy, DockerClient dockerClient) {
     this.dockerClient = dockerClient;
-    ports = freePorts();
+    reservations = reservePorts();
+    ports = portMap(reservations);
     network = Network.newNetwork();
     try {
       issuer = TestIssuer.start();
     } catch (RuntimeException e) {
       network.close();
+      closeReservations();
       throw e;
     }
     http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(1)).build();
@@ -104,6 +123,64 @@ public final class FaultStack implements AutoCloseable {
                 "AUTH_DB_PASSWORD", PASSWORD,
                 "EXTBANK_DB_PASSWORD", PASSWORD)));
     env.put(Part.TOXIPROXY, new HashMap<>());
+    env.put(
+        Part.KAFKA,
+        new HashMap<>(
+            Map.ofEntries(
+                Map.entry("CLUSTER_ID", "5L6g3nShT-eMCtK--X86sw"),
+                Map.entry("KAFKA_NODE_ID", "1"),
+                Map.entry("KAFKA_PROCESS_ROLES", "broker,controller"),
+                Map.entry("KAFKA_LISTENERS", "PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092"),
+                Map.entry(
+                    "KAFKA_ADVERTISED_LISTENERS",
+                    "PLAINTEXT://kafka:9092,HOST://localhost:" + ports.get(Part.KAFKA)),
+                Map.entry(
+                    "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP",
+                    "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT"),
+                Map.entry("KAFKA_CONTROLLER_QUORUM_VOTERS", "1@kafka:9093"),
+                Map.entry("KAFKA_CONTROLLER_LISTENER_NAMES", "CONTROLLER"),
+                Map.entry("KAFKA_INTER_BROKER_LISTENER_NAME", "PLAINTEXT"),
+                Map.entry("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1"),
+                Map.entry("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1"),
+                Map.entry("KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "1"),
+                Map.entry("KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS", "0"),
+                Map.entry("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false"),
+                Map.entry("KAFKA_LOG_DIRS", "/var/lib/kafka/data"),
+                Map.entry("KAFKA_HEAP_OPTS", "-Xms512m -Xmx512m"))));
+    env.put(
+        Part.EXTBANK,
+        new HashMap<>(
+            Map.of(
+                "SERVER_PORT", "8083",
+                "TALLY_DB_URL", "jdbc:postgresql://postgres:5432/tally",
+                "TALLY_DB_USER", "extbank_app",
+                "TALLY_DB_PASSWORD", PASSWORD,
+                "JAVA_TOOL_OPTIONS", "-Xmx192m",
+                "EXTBANK_API_KEY", API_KEY)));
+    for (Part worker : List.of(Part.WORKER, Part.WORKER2)) {
+      env.put(
+          worker,
+          new HashMap<>(
+              Map.ofEntries(
+                  Map.entry("SERVER_PORT", "8084"),
+                  Map.entry("TALLY_LEDGER_ROLES", "scheduler,orchestrator,relay,expiry"),
+                  Map.entry("TALLY_LEDGER_STRATEGY", strategy),
+                  Map.entry("TALLY_DB_URL", "jdbc:postgresql://postgres:5432/tally"),
+                  Map.entry("TALLY_DB_USER", "ledger_app"),
+                  Map.entry("TALLY_DB_PASSWORD", PASSWORD),
+                  Map.entry("TALLY_DB_OWNER_USER", "ledger_owner"),
+                  Map.entry("TALLY_DB_OWNER_PASSWORD", PASSWORD),
+                  Map.entry("TALLY_DB_POOL_SIZE", "16"),
+                  Map.entry("TALLY_KAFKA_BOOTSTRAP", "kafka:9092"),
+                  Map.entry("TALLY_EXTBANK_URL", "http://extbank:8083"),
+                  Map.entry("EXTBANK_API_KEY", API_KEY),
+                  Map.entry("TALLY_PAYMENT_STATUS_BACKOFF_MS", "100,100,200,200,300,300,400,400"),
+                  Map.entry("TALLY_EXTBANK_TIMEOUT_MS", "300"),
+                  Map.entry("TALLY_SCHEDULER_POLL_MS", "100"),
+                  Map.entry("TALLY_RELAY_POLL_MS", "50"),
+                  Map.entry("TALLY_PAYMENT_LEASE_MS", "2000"),
+                  Map.entry("JAVA_TOOL_OPTIONS", "-Xmx448m"))));
+    }
     env.put(
         Part.LEDGER,
         new HashMap<>(
@@ -126,8 +203,13 @@ public final class FaultStack implements AutoCloseable {
   public static FaultStack start(String strategy, Set<Part> parts) {
     Set<Part> requested = Set.copyOf(parts);
     DockerClient dockerClient = DockerClientFactory.instance().client();
-    if (requested.contains(Part.LEDGER)) {
+    if (requested.contains(Part.LEDGER)
+        || requested.contains(Part.WORKER)
+        || requested.contains(Part.WORKER2)) {
       requireLedgerImage(dockerClient);
+    }
+    if (requested.contains(Part.EXTBANK)) {
+      requireImage(dockerClient, EXTBANK_IMAGE);
     }
     FaultStack stack = new FaultStack(strategy, dockerClient);
     try {
@@ -136,12 +218,20 @@ public final class FaultStack implements AutoCloseable {
           if (part == Part.LEDGER) {
             Testcontainers.exposeHostPorts(URI.create(stack.issuer.jwksUri()).getPort());
           }
-          GenericContainer<?> container = stack.createContainer(part);
-          stack.containers.put(part, container);
-          container.start();
-          stack.awaitReady(alias(part), READY_TIMEOUT);
-          if (part == Part.TOXIPROXY) {
-            stack.restoreProxy();
+          stack.releaseReservation(part);
+          try {
+            GenericContainer<?> container = stack.createContainer(part);
+            stack.containers.put(part, container);
+            if (part == Part.WORKER || part == Part.WORKER2) {
+              continue;
+            }
+            container.start();
+            stack.awaitReady(alias(part), READY_TIMEOUT);
+            if (part == Part.TOXIPROXY) {
+              stack.restoreProxy();
+            }
+          } finally {
+            stack.reserveIfStopped(part);
           }
         }
       }
@@ -157,23 +247,41 @@ public final class FaultStack implements AutoCloseable {
   }
 
   public void kill(String alias) {
-    GenericContainer<?> container = container(part(alias));
+    Part part = part(alias);
+    GenericContainer<?> container = container(part);
     dockerClient.killContainerCmd(container.getContainerId()).withSignal("KILL").exec();
+    awaitExit(alias, Duration.ofSeconds(60));
   }
 
   public void start(String alias) {
     Part part = part(alias);
     GenericContainer<?> container = container(part);
-    if (changed.contains(part)) {
-      container.stop();
-      container = createContainer(part);
-      containers.put(part, container);
-      container.start();
-      changed.remove(part);
-    } else {
-      dockerClient.startContainerCmd(container.getContainerId()).exec();
+    try {
+      if (changed.contains(part)) {
+        if (container.getContainerId() != null) {
+          container.stop();
+          reserveIfStopped(part);
+        }
+        releaseReservation(part);
+        container = createContainer(part);
+        containers.put(part, container);
+        container.start();
+        changed.remove(part);
+      } else if (container.getContainerId() == null) {
+        releaseReservation(part);
+        container.start();
+      } else {
+        releaseReservation(part);
+        dockerClient.startContainerCmd(container.getContainerId()).exec();
+      }
+    } finally {
+      reserveIfStopped(part);
     }
-    awaitReady(alias, READY_TIMEOUT);
+    if (part == Part.WORKER || part == Part.WORKER2) {
+      awaitWorkerReadyOrHalt(alias, READY_TIMEOUT);
+    } else {
+      awaitReady(alias, READY_TIMEOUT);
+    }
     if (part == Part.TOXIPROXY) {
       restoreProxy();
     }
@@ -182,10 +290,15 @@ public final class FaultStack implements AutoCloseable {
   public void restart(String alias, int stopTimeoutSeconds) {
     Part part = part(alias);
     GenericContainer<?> container = container(part);
-    dockerClient
-        .restartContainerCmd(container.getContainerId())
-        .withTimeout(stopTimeoutSeconds)
-        .exec();
+    releaseReservation(part);
+    try {
+      dockerClient
+          .restartContainerCmd(container.getContainerId())
+          .withTimeout(stopTimeoutSeconds)
+          .exec();
+    } finally {
+      reserveIfStopped(part);
+    }
     awaitReady(alias, READY_TIMEOUT);
     if (part == Part.TOXIPROXY) {
       restoreProxy();
@@ -196,9 +309,43 @@ public final class FaultStack implements AutoCloseable {
   public void withEnv(String alias, String key, String value) {
     Part part = part(alias);
     GenericContainer<?> container = container(part);
+    if (running(alias)) {
+      throw new IllegalStateException("container must be stopped: " + alias);
+    }
     env.get(part).put(Objects.requireNonNull(key), Objects.requireNonNull(value));
     if (!Objects.equals(container.getEnvMap().get(key), value)) {
       changed.add(part);
+    }
+  }
+
+  public boolean running(String alias) {
+    GenericContainer<?> container = container(part(alias));
+    if (container.getContainerId() == null) {
+      return false;
+    }
+    return dockerClient
+        .inspectContainerCmd(container.getContainerId())
+        .exec()
+        .getState()
+        .getRunning();
+  }
+
+  public void awaitExit(String alias, Duration timeout) {
+    Part part = part(alias);
+    GenericContainer<?> container = container(part);
+    if (container.getContainerId() == null) {
+      reserveIfStopped(part);
+      return;
+    }
+    try {
+      await()
+          .pollDelay(Duration.ZERO)
+          .pollInterval(Duration.ofMillis(50))
+          .atMost(timeout)
+          .until(() -> !running(alias));
+      reserveIfStopped(part);
+    } catch (ConditionTimeoutException e) {
+      throw new IllegalStateException("container still running: " + alias, e);
     }
   }
 
@@ -212,6 +359,21 @@ public final class FaultStack implements AutoCloseable {
     return "http://localhost:" + ports.get(Part.LEDGER);
   }
 
+  public String kafkaBootstrap() {
+    container(Part.KAFKA);
+    return "localhost:" + ports.get(Part.KAFKA);
+  }
+
+  public String extbankUrl() {
+    container(Part.EXTBANK);
+    return "http://localhost:" + ports.get(Part.EXTBANK);
+  }
+
+  public String extbankApiKey() {
+    container(Part.EXTBANK);
+    return API_KEY;
+  }
+
   public Connection jdbc() throws SQLException {
     return DriverManager.getConnection(jdbcUrl(), "ledger_app", PASSWORD);
   }
@@ -221,8 +383,20 @@ public final class FaultStack implements AutoCloseable {
   }
 
   public List<Violation> checker() throws SQLException {
+    return checker(containers.containsKey(Part.KAFKA), false);
+  }
+
+  public List<Violation> checker(boolean topicCheck, boolean requireDrained) throws SQLException {
     try (Connection connection = jdbc()) {
-      return new InvariantChecker().check(connection);
+      InvariantChecker checker = new InvariantChecker();
+      List<Violation> violations = new ArrayList<>(checker.check(connection));
+      if (topicCheck) {
+        container(Part.KAFKA);
+        TopicCheck.Snapshot snapshot =
+            TopicCheck.read(kafkaBootstrap(), "tally.transactions.v1", Duration.ofSeconds(30));
+        violations.addAll(checker.checkTopic(connection, snapshot, requireDrained));
+      }
+      return List.copyOf(violations);
     }
   }
 
@@ -235,6 +409,10 @@ public final class FaultStack implements AutoCloseable {
     limits.put("postgres", POSTGRES_MEMORY_MB);
     limits.put("toxiproxy", TOXIPROXY_MEMORY_MB);
     limits.put("ledger", LEDGER_MEMORY_MB);
+    limits.put("kafka", KAFKA_MEMORY_MB);
+    limits.put("extbank", EXTBANK_MEMORY_MB);
+    limits.put("worker", WORKER_MEMORY_MB);
+    limits.put("worker2", WORKER_MEMORY_MB);
     limits.put("k6", K6_MEMORY_MB);
     return Collections.unmodifiableMap(limits);
   }
@@ -345,7 +523,47 @@ public final class FaultStack implements AutoCloseable {
                     case TOXIPROXY ->
                         httpReady("http://localhost:" + ports.get(Part.TOXIPROXY) + "/version");
                     case LEDGER -> httpReady(ledgerUrl() + "/ready");
+                    case KAFKA -> true;
+                    case EXTBANK -> httpReady(extbankUrl() + "/ready");
+                    case WORKER, WORKER2 -> httpReady(workerUrl(part) + "/health");
                   });
+    } catch (ConditionTimeoutException e) {
+      throw new IllegalStateException("container not ready: " + alias, e);
+    }
+  }
+
+  private void awaitWorkerReadyOrHalt(String alias, Duration timeout) {
+    Part part = part(alias);
+    GenericContainer<?> container = container(part);
+    try {
+      await()
+          .pollDelay(Duration.ZERO)
+          .pollInterval(Duration.ofMillis(50))
+          .atMost(timeout)
+          .until(
+              () -> {
+                if (httpReady(workerUrl(part) + "/health")) {
+                  return true;
+                }
+                var state =
+                    dockerClient.inspectContainerCmd(container.getContainerId()).exec().getState();
+                if (state.getRunning()) {
+                  return false;
+                }
+                reserveIfStopped(part);
+                Long exitCode = state.getExitCodeLong();
+                if (exitCode != null
+                    && exitCode == 137L
+                    && !env.get(part).getOrDefault("TALLY_FAILPOINT", "").isEmpty()) {
+                  return true;
+                }
+                throw new IllegalStateException(
+                    "worker exited before becoming ready: "
+                        + alias
+                        + " (exit code "
+                        + exitCode
+                        + ")");
+              });
     } catch (ConditionTimeoutException e) {
       throw new IllegalStateException("container not ready: " + alias, e);
     }
@@ -359,13 +577,14 @@ public final class FaultStack implements AutoCloseable {
     List<Runnable> cleanup = new ArrayList<>();
     for (Part part : List.of(Part.values()).reversed()) {
       GenericContainer<?> container = containers.get(part);
-      if (container != null) {
+      if (container != null && container.getContainerId() != null) {
         cleanup.add(container::stop);
       }
     }
     cleanup.add(network::close);
     cleanup.add(issuer::close);
     cleanup.add(http::close);
+    cleanup.add(this::closeReservations);
     RuntimeException failure = null;
     for (Runnable action : cleanup) {
       try {
@@ -409,18 +628,48 @@ public final class FaultStack implements AutoCloseable {
                   .withExposedPorts(8080)
                   .waitingFor(
                       Wait.forHttp("/ready").forStatusCode(200).withStartupTimeout(READY_TIMEOUT));
+          case KAFKA ->
+              new GenericContainer<>(KAFKA_IMAGE)
+                  .withExposedPorts(29092)
+                  .waitingFor(
+                      Wait.forLogMessage(".*Kafka Server started.*", 1)
+                          .withStartupTimeout(READY_TIMEOUT));
+          case EXTBANK ->
+              new GenericContainer<>(EXTBANK_IMAGE)
+                  .withExposedPorts(8083)
+                  .waitingFor(
+                      Wait.forHttp("/ready").forStatusCode(200).withStartupTimeout(READY_TIMEOUT));
+          case WORKER, WORKER2 ->
+              new GenericContainer<>(LEDGER_IMAGE)
+                  .withExposedPorts(8084)
+                  .waitingFor(
+                      new WaitStrategy() {
+                        @Override
+                        public void waitUntilReady(WaitStrategyTarget target) {}
+
+                        @Override
+                        public WaitStrategy withStartupTimeout(Duration startupTimeout) {
+                          return this;
+                        }
+                      });
         };
     int containerPort =
         switch (part) {
           case POSTGRES -> 5432;
           case TOXIPROXY -> 8474;
           case LEDGER -> 8080;
+          case KAFKA -> 29092;
+          case EXTBANK -> 8083;
+          case WORKER, WORKER2 -> 8084;
         };
     long memoryMb =
         switch (part) {
           case POSTGRES -> POSTGRES_MEMORY_MB;
           case TOXIPROXY -> TOXIPROXY_MEMORY_MB;
           case LEDGER -> LEDGER_MEMORY_MB;
+          case KAFKA -> KAFKA_MEMORY_MB;
+          case EXTBANK -> EXTBANK_MEMORY_MB;
+          case WORKER, WORKER2 -> WORKER_MEMORY_MB;
         };
     container
         .withNetwork(network)
@@ -491,6 +740,10 @@ public final class FaultStack implements AutoCloseable {
       case "postgres" -> Part.POSTGRES;
       case "toxiproxy" -> Part.TOXIPROXY;
       case "ledger" -> Part.LEDGER;
+      case "kafka" -> Part.KAFKA;
+      case "extbank" -> Part.EXTBANK;
+      case "worker" -> Part.WORKER;
+      case "worker2" -> Part.WORKER2;
       default -> throw new IllegalArgumentException("unknown container alias: " + alias);
     };
   }
@@ -499,16 +752,82 @@ public final class FaultStack implements AutoCloseable {
     return part.name().toLowerCase(Locale.ROOT);
   }
 
-  private static Map<Part, Integer> freePorts() {
-    try (ServerSocket postgres = new ServerSocket(0);
-        ServerSocket toxiproxy = new ServerSocket(0);
-        ServerSocket ledger = new ServerSocket(0)) {
-      return Map.of(
-          Part.POSTGRES, postgres.getLocalPort(),
-          Part.TOXIPROXY, toxiproxy.getLocalPort(),
-          Part.LEDGER, ledger.getLocalPort());
+  private static Map<Part, ServerSocket> reservePorts() {
+    Map<Part, ServerSocket> reservations = new EnumMap<>(Part.class);
+    try {
+      for (Part part : Part.values()) {
+        reservations.put(part, new ServerSocket(0));
+      }
+      return reservations;
     } catch (IOException e) {
+      for (ServerSocket reservation : reservations.values()) {
+        try {
+          reservation.close();
+        } catch (IOException closeFailure) {
+          e.addSuppressed(closeFailure);
+        }
+      }
       throw new UncheckedIOException("failed to reserve host ports", e);
+    }
+  }
+
+  private static Map<Part, Integer> portMap(Map<Part, ServerSocket> reservations) {
+    Map<Part, Integer> ports = new EnumMap<>(Part.class);
+    reservations.forEach((part, reservation) -> ports.put(part, reservation.getLocalPort()));
+    return ports;
+  }
+
+  private void releaseReservation(Part part) {
+    ServerSocket reservation = reservations.remove(part);
+    if (reservation != null) {
+      try {
+        reservation.close();
+      } catch (IOException e) {
+        throw new UncheckedIOException("failed to release host port for " + alias(part), e);
+      }
+    }
+  }
+
+  private void reserveIfStopped(Part part) {
+    GenericContainer<?> container = containers.get(part);
+    if (reservations.containsKey(part)
+        || (container != null
+            && container.getContainerId() != null
+            && dockerClient
+                .inspectContainerCmd(container.getContainerId())
+                .exec()
+                .getState()
+                .getRunning())) {
+      return;
+    }
+    try {
+      reservations.put(part, new ServerSocket(ports.get(part)));
+    } catch (IOException e) {
+      LOGGER.log(
+          Level.WARNING,
+          "Could not reserve host port " + ports.get(part) + " for " + alias(part),
+          e);
+    }
+  }
+
+  private void closeReservations() {
+    RuntimeException failure = null;
+    for (Part part : Part.values()) {
+      ServerSocket reservation = reservations.remove(part);
+      if (reservation != null) {
+        try {
+          reservation.close();
+        } catch (IOException e) {
+          if (failure == null) {
+            failure = new UncheckedIOException("failed to close host port reservations", e);
+          } else {
+            failure.addSuppressed(e);
+          }
+        }
+      }
+    }
+    if (failure != null) {
+      throw failure;
     }
   }
 
@@ -518,6 +837,18 @@ public final class FaultStack implements AutoCloseable {
     } catch (NotFoundException e) {
       throw new IllegalStateException(
           "image tally/ledger:dev not found, run: sh task.sh images", e);
+    }
+  }
+
+  private String workerUrl(Part part) {
+    return "http://localhost:" + ports.get(part);
+  }
+
+  private static void requireImage(DockerClient dockerClient, String image) {
+    try {
+      dockerClient.inspectImageCmd(image).exec();
+    } catch (NotFoundException e) {
+      throw new IllegalStateException("image " + image + " not found, run: sh task.sh images", e);
     }
   }
 }
