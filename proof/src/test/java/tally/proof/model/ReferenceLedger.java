@@ -1,5 +1,9 @@
 package tally.proof.model;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -17,6 +21,10 @@ public final class ReferenceLedger {
   private final List<PostedTx> posted = new ArrayList<>();
   private final Map<String, StoredResult> byKey = new HashMap<>();
   private final List<Request> requests = new ArrayList<>();
+  private final List<ModelHold> holds = new ArrayList<>();
+  private final List<ModelSchedule> schedules = new ArrayList<>();
+  private final List<ModelPayment> payments = new ArrayList<>();
+  private Instant now = Instant.EPOCH;
 
   private record PostedTx(
       String kind, int[] accountIndexes, boolean[] debit, long[] amounts, boolean reversed) {}
@@ -24,6 +32,22 @@ public final class ReferenceLedger {
   private record StoredResult(String fingerprint, Expected expected) {}
 
   private record Request(String key, String fingerprint, Runnable resend) {}
+
+  public void setNow(Instant now) {
+    this.now = now;
+  }
+
+  public List<ModelHold> holds() {
+    return List.copyOf(holds);
+  }
+
+  public List<ModelSchedule> schedules() {
+    return List.copyOf(schedules);
+  }
+
+  public List<ModelPayment> payments() {
+    return List.copyOf(payments);
+  }
 
   public int addAccount(UUID id, long minBalance, boolean creditNormal) {
     int index = accounts.size();
@@ -80,6 +104,212 @@ public final class ReferenceLedger {
         () -> reversePosting(postedIndex));
   }
 
+  public Expected placeHold(String key, int account, long amount, Instant expiresAt) {
+    return keyed(
+        key,
+        "HOLD:" + account + ":" + amount + ":" + expiresAt,
+        () -> placeHold(key, account, amount, expiresAt),
+        () -> {
+          Expected error = accountError(account);
+          if (error != null) {
+            return error;
+          }
+          if (amount < 1) {
+            return Expected.error(422, "INVALID_AMOUNT");
+          }
+          if (!expiresAt.isAfter(now) || expiresAt.isAfter(now.plus(Duration.ofDays(7)))) {
+            return Expected.error(422, "INVALID_EXPIRY");
+          }
+          try {
+            long reserved = Math.addExact(held(account), amount);
+            if (Math.addExact(balance(account), -reserved) < accounts.get(account).minBalance()) {
+              return Expected.error(422, "INSUFFICIENT_FUNDS");
+            }
+          } catch (ArithmeticException e) {
+            return Expected.error(422, "AMOUNT_OVERFLOW");
+          }
+          holds.add(new ModelHold(account, amount, expiresAt));
+          return Expected.ok(201);
+        });
+  }
+
+  public Expected captureHold(String key, int hold, long amount, int destination) {
+    return keyed(
+        key,
+        "CAPTURE:" + hold + ":" + amount + ":" + destination,
+        () -> captureHold(key, hold, amount, destination),
+        () -> {
+          if (hold < 0 || hold >= holds.size() || !hasAccount(destination)) {
+            return Expected.error(404, "NOT_FOUND");
+          }
+          ModelHold target = holds.get(hold);
+          if (!"ACTIVE".equals(target.state())) {
+            return Expected.error(422, "HOLD_NOT_ACTIVE");
+          }
+          if (!now.isBefore(target.expiresAt())) {
+            return Expected.error(422, "HOLD_EXPIRED");
+          }
+          if (amount < 1) {
+            return Expected.error(422, "INVALID_AMOUNT");
+          }
+          if (amount > target.amount()) {
+            return Expected.error(422, "CAPTURE_EXCEEDS_HOLD");
+          }
+          if (destination == target.account()) {
+            return Expected.error(422, "SAME_ACCOUNT");
+          }
+          Expected expected =
+              post(
+                  new PostedTx(
+                      "HOLD_CAPTURE",
+                      new int[] {target.account(), destination},
+                      new boolean[] {true, false},
+                      new long[] {amount, amount},
+                      false),
+                  Map.of(target.account(), -target.amount()));
+          if (expected.status() == 201) {
+            target.state("CAPTURED");
+          }
+          return expected;
+        });
+  }
+
+  public Expected releaseHold(String key, int hold) {
+    return keyed(
+        key,
+        "RELEASE:" + hold,
+        () -> releaseHold(key, hold),
+        () -> {
+          if (hold < 0 || hold >= holds.size()) {
+            return Expected.error(404, "NOT_FOUND");
+          }
+          ModelHold target = holds.get(hold);
+          if (!"ACTIVE".equals(target.state())) {
+            return Expected.error(422, "HOLD_NOT_ACTIVE");
+          }
+          target.state("RELEASED");
+          return Expected.ok(200);
+        });
+  }
+
+  public void advance(Duration duration) {
+    now = now.plus(duration);
+    for (ModelHold hold : holds) {
+      if ("ACTIVE".equals(hold.state()) && !hold.expiresAt().isAfter(now)) {
+        hold.state("EXPIRED");
+      }
+    }
+    runScheduler();
+  }
+
+  public Expected createSchedule(
+      String key, int source, int destination, long amount, boolean daily, Instant startAt) {
+    return keyed(
+        key,
+        "SCHEDULE:" + source + ":" + destination + ":" + amount + ":" + daily + ":" + startAt,
+        () -> createSchedule(key, source, destination, amount, daily, startAt),
+        () -> {
+          if (source == destination) {
+            return Expected.error(422, "SAME_ACCOUNT");
+          }
+          Expected error = accountError(source);
+          if (error != null) {
+            return error;
+          }
+          error = accountError(destination);
+          if (error != null) {
+            return error;
+          }
+          ModelSchedule schedule = new ModelSchedule(source, destination, amount, daily, startAt);
+          LocalDate date = startAt.atOffset(ZoneOffset.UTC).toLocalDate();
+          schedule.addOccurrence(
+              new ModelSchedule.ModelOccurrence(date, startAt, "PENDING", 0, startAt, null));
+          schedules.add(schedule);
+          return Expected.ok(201);
+        });
+  }
+
+  public void runScheduler() {
+    for (int handled = 0; handled < 20; handled++) {
+      ModelSchedule selected = null;
+      ModelSchedule.ModelOccurrence earliest = null;
+      int selectedIndex = -1;
+      for (ModelSchedule schedule : schedules) {
+        if (!"ACTIVE".equals(schedule.status())) {
+          continue;
+        }
+        List<ModelSchedule.ModelOccurrence> occurrences = schedule.occurrences();
+        for (int index = 0; index < occurrences.size(); index++) {
+          ModelSchedule.ModelOccurrence occurrence = occurrences.get(index);
+          if ("PENDING".equals(occurrence.state())
+              && !occurrence.nextAttemptAt().isAfter(now)
+              && (earliest == null || occurrence.dueAt().isBefore(earliest.dueAt()))) {
+            selected = schedule;
+            selectedIndex = index;
+            earliest = occurrence;
+          }
+        }
+      }
+      if (selected == null) {
+        return;
+      }
+      runOccurrence(selected, selectedIndex, earliest);
+    }
+  }
+
+  public Expected createPayment(String key, int source, long amount, String behaviour) {
+    return keyed(
+        key,
+        "PAYMENT:" + source + ":" + amount + ":" + behaviour,
+        () -> createPayment(key, source, amount, behaviour),
+        () -> {
+          Expected error = accountError(source);
+          if (error != null) {
+            return error;
+          }
+          payments.add(new ModelPayment(source, amount, behaviour));
+          return Expected.ok(202);
+        });
+  }
+
+  public String settlePayment(int payment) {
+    ModelPayment target = payments.get(payment);
+    if (!"INITIATED".equals(target.state())) {
+      return target.state();
+    }
+    ModelAccount source = accounts.get(target.source());
+    if ("CLOSED".equals(source.status()) || "FROZEN".equals(source.status())) {
+      target.state("FAILED");
+      return target.state();
+    }
+    long debited;
+    try {
+      long reserved = Math.addExact(held(target.source()), target.amount());
+      if (Math.addExact(source.balance(), -reserved) < source.minBalance()) {
+        target.state("FAILED");
+        return target.state();
+      }
+      debited = Math.addExact(source.balance(), -target.amount());
+    } catch (ArithmeticException e) {
+      target.state("FAILED");
+      return target.state();
+    }
+    switch (target.behaviour()) {
+      case "ACCEPT", "CONFIRM_TWICE" -> {
+        source.post(debited);
+        target.state("SETTLED");
+      }
+      case "REJECT" -> {
+        long original = source.balance();
+        source.post(debited);
+        source.post(original);
+        target.state("REJECTED_COMPENSATED");
+      }
+      default -> throw new IllegalArgumentException("unknown payment behaviour");
+    }
+    return target.state();
+  }
+
   public Expected freeze(int account) {
     if (!hasAccount(account)) {
       return Expected.error(404, "NOT_FOUND");
@@ -103,8 +333,13 @@ public final class ReferenceLedger {
     if ("CLOSED".equals(target.status())) {
       return Expected.error(422, "ACCOUNT_CLOSED");
     }
-    if (target.balance() != 0 || target.held() != 0) {
+    if (target.balance() != 0 || held(account) != 0) {
       return Expected.error(422, "ACCOUNT_NOT_EMPTY");
+    }
+    for (ModelPayment payment : payments) {
+      if (payment.source() == account && "INITIATED".equals(payment.state())) {
+        return Expected.error(422, "ACCOUNT_NOT_EMPTY");
+      }
     }
     target.status("CLOSED");
     return Expected.ok(200);
@@ -126,7 +361,13 @@ public final class ReferenceLedger {
   }
 
   public long held(int account) {
-    return accounts.get(account).held();
+    long held = accounts.get(account).held();
+    for (ModelHold hold : holds) {
+      if (hold.account() == account && "ACTIVE".equals(hold.state())) {
+        held = Math.addExact(held, hold.amount());
+      }
+    }
+    return held;
   }
 
   public long available(int account) {
@@ -144,7 +385,9 @@ public final class ReferenceLedger {
       return replay(stored, fingerprint);
     }
     Expected expected = operation.get();
-    if (expected.status() == 201 || expected.status() == 422 || expected.status() == 404) {
+    if ((expected.status() >= 200 && expected.status() < 300)
+        || expected.status() == 422
+        || expected.status() == 404) {
       byKey.put(key, new StoredResult(fingerprint, expected));
       requests.add(new Request(key, fingerprint, resend));
     }
@@ -211,6 +454,14 @@ public final class ReferenceLedger {
   }
 
   private Expected post(PostedTx transaction) {
+    Expected expected = post(transaction, Map.of());
+    if (expected.status() == 201) {
+      posted.add(transaction);
+    }
+    return expected;
+  }
+
+  private Expected post(PostedTx transaction, Map<Integer, Long> heldDelta) {
     List<Integer> order = new ArrayList<>();
     for (int index : transaction.accountIndexes()) {
       if (index != SETTLEMENT && !hasAccount(index)) {
@@ -224,7 +475,10 @@ public final class ReferenceLedger {
       if ("CLOSED".equals(status)) {
         return Expected.error(422, "ACCOUNT_CLOSED");
       }
-      if ("FROZEN".equals(status) && !"REVERSAL".equals(transaction.kind())) {
+      if ("FROZEN".equals(status)
+          && ("DEPOSIT".equals(transaction.kind())
+              || "WITHDRAWAL".equals(transaction.kind())
+              || "TRANSFER".equals(transaction.kind()))) {
         return Expected.error(422, "ACCOUNT_FROZEN");
       }
     }
@@ -240,7 +494,10 @@ public final class ReferenceLedger {
       for (int index : order) {
         ModelAccount target = account(index);
         if (index != SETTLEMENT
-            && Math.addExact(balances.get(index), -target.held()) < target.minBalance()) {
+            && Math.addExact(
+                    balances.get(index),
+                    -Math.addExact(held(index), heldDelta.getOrDefault(index, 0L)))
+                < target.minBalance()) {
           return Expected.error(422, "INSUFFICIENT_FUNDS");
         }
       }
@@ -250,8 +507,74 @@ public final class ReferenceLedger {
     for (int index : order) {
       account(index).post(balances.get(index));
     }
-    posted.add(transaction);
     return Expected.ok(201);
+  }
+
+  private Expected accountError(int index) {
+    if (!hasAccount(index)) {
+      return Expected.error(404, "NOT_FOUND");
+    }
+    String status = accounts.get(index).status();
+    if ("CLOSED".equals(status)) {
+      return Expected.error(422, "ACCOUNT_CLOSED");
+    }
+    if ("FROZEN".equals(status)) {
+      return Expected.error(422, "ACCOUNT_FROZEN");
+    }
+    return null;
+  }
+
+  private void runOccurrence(
+      ModelSchedule schedule, int index, ModelSchedule.ModelOccurrence occurrence) {
+    String state;
+    String reason = null;
+    int attempts = occurrence.attempts();
+    Instant nextAttemptAt = occurrence.nextAttemptAt();
+    if (occurrence.dueAt().isBefore(now.minus(Duration.ofDays(7)))) {
+      state = "SKIPPED";
+      reason = "MISSED_WINDOW";
+    } else {
+      Expected expected =
+          post(
+              new PostedTx(
+                  "TRANSFER",
+                  new int[] {schedule.source(), schedule.destination()},
+                  new boolean[] {true, false},
+                  new long[] {schedule.amount(), schedule.amount()},
+                  false),
+              Map.of());
+      if (expected.status() == 201) {
+        state = "POSTED";
+      } else if ("INSUFFICIENT_FUNDS".equals(expected.errorCode())) {
+        attempts = Math.addExact(attempts, 1);
+        if (attempts <= 3) {
+          state = "PENDING";
+          nextAttemptAt = now.plus(Duration.ofHours(1));
+        } else {
+          state = "FAILED";
+          reason = expected.errorCode();
+        }
+      } else {
+        state = "FAILED";
+        reason = expected.errorCode();
+      }
+    }
+    schedule.occurrence(
+        index,
+        new ModelSchedule.ModelOccurrence(
+            occurrence.date(), occurrence.dueAt(), state, attempts, nextAttemptAt, reason));
+    if (!"PENDING".equals(state)) {
+      if (schedule.daily()) {
+        LocalDate date = occurrence.date().plusDays(1);
+        Instant dueAt =
+            date.atTime(schedule.startAt().atOffset(ZoneOffset.UTC).toLocalTime())
+                .toInstant(ZoneOffset.UTC);
+        schedule.addOccurrence(
+            new ModelSchedule.ModelOccurrence(date, dueAt, "PENDING", 0, dueAt, null));
+      } else {
+        schedule.status("COMPLETED");
+      }
+    }
   }
 
   private boolean hasAccount(int index) {
