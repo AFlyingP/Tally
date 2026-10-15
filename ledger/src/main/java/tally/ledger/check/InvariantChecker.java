@@ -6,7 +6,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import org.springframework.stereotype.Component;
+import tally.ledger.outbox.OutboxStore;
 
 @Component
 public class InvariantChecker {
@@ -334,6 +337,35 @@ public class InvariantChecker {
             A1,
             row -> new Violation("A1", row.getString("subject"), row.getString("detail"))));
     connection.commit();
+    return violations;
+  }
+
+  public List<Violation> checkTopic(
+      Connection connection, TopicCheck.Snapshot snapshot, boolean requireDrained)
+      throws SQLException {
+    OutboxStore outbox = new OutboxStore();
+    Set<UUID> published = outbox.publishedEventIds(connection);
+    Set<UUID> all = outbox.allEventIds(connection);
+    List<Violation> violations = new ArrayList<>();
+    published.stream()
+        .filter(id -> !snapshot.eventIds().contains(id))
+        .sorted()
+        .forEach(
+            id ->
+                violations.add(new Violation("I10", "event=" + id, "published but not on topic")));
+    snapshot.eventIds().stream()
+        .filter(id -> !all.contains(id))
+        .sorted()
+        .forEach(
+            id ->
+                violations.add(new Violation("I10", "event=" + id, "on topic without outbox row")));
+    if (requireDrained) {
+      violations.addAll(
+          read(
+              connection,
+              "SELECT id FROM ledger.outbox WHERE published_at IS NULL ORDER BY id",
+              row -> new Violation("I10", "outbox=" + row.getLong("id"), "not published")));
+    }
     return violations;
   }
 

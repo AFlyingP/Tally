@@ -18,13 +18,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
 import tally.ledger.audit.AuditEntry;
 import tally.ledger.audit.AuditWriter;
+import tally.ledger.outbox.OutboxRelay;
+import tally.ledger.outbox.OutboxStore;
 import tally.ledger.testing.LedgerIT;
 import tally.platform.security.Role;
 import tools.jackson.databind.JsonNode;
@@ -33,6 +38,33 @@ import tools.jackson.databind.json.JsonMapper;
 class InvariantCheckerIT extends LedgerIT {
 
   private static final JsonMapper JSON = JsonMapper.builder().build();
+  private static final KafkaContainer KAFKA =
+      new KafkaContainer("apache/kafka:4.2.2").withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false");
+
+  private static ConfigurableApplicationContext topicContext;
+
+  @BeforeAll
+  static void startKafka() {
+    KAFKA.start();
+    topicContext =
+        startApp(
+            Map.of(
+                "tally.ledger.kafka.bootstrap",
+                KAFKA.getBootstrapServers(),
+                "spring.datasource.hikari.maximum-pool-size",
+                "4"));
+  }
+
+  @AfterAll
+  static void stopKafka() {
+    try {
+      if (topicContext != null) {
+        topicContext.close();
+      }
+    } finally {
+      KAFKA.close();
+    }
+  }
 
   @Test
   void cleanDatabaseHasNoViolations() throws Exception {
@@ -446,6 +478,109 @@ class InvariantCheckerIT extends LedgerIT {
     assertThat(failedErr.toString(StandardCharsets.UTF_8)).startsWith("check failed: ");
   }
 
+  @Test
+  void topicCheckPassesWhenDrained() throws Exception {
+    deposit(createAccount(), 100);
+    drainOutbox();
+
+    CommandResult result = command(topicContext, "--topic-check", "--require-drained");
+
+    assertThat(result.code()).isZero();
+    assertThat(result.err()).isEmpty();
+    assertThat(result.out().lines())
+        .anyMatch(line -> line.matches("topic events=[0-9]+ duplicates=[0-9]+"));
+    assertThat(result.out()).endsWith("invariants ok: 0 violations" + System.lineSeparator());
+  }
+
+  @Test
+  void topicCheckDetectsMarkedButMissingEvent() throws Exception {
+    drainOutbox();
+    OutboxRow row = outboxRow(deposit(createAccount(), 100));
+    assertThat(row.publishedAt()).isNull();
+
+    try (Connection db = appJdbc()) {
+      try {
+        setPublishedAt(db, row.id(), OffsetDateTime.now());
+        CommandResult result = command(topicContext, "--topic-check", "--require-drained");
+
+        assertThat(result.code()).isEqualTo(1);
+        assertThat(result.err()).isEmpty();
+        assertThat(result.out().lines().filter(line -> line.startsWith("I10 ")))
+            .containsExactly("I10 event=" + row.eventId() + " published but not on topic");
+        assertThat(result.out())
+            .endsWith("invariants failed: 1 violations" + System.lineSeparator());
+      } finally {
+        setPublishedAt(db, row.id(), row.publishedAt());
+        drainOutbox();
+      }
+    }
+  }
+
+  @Test
+  void requireDrainedDetectsUnpublishedRow() throws Exception {
+    drainOutbox();
+    OutboxRow row = outboxRow(deposit(createAccount(), 100));
+    try {
+      CommandResult result = command(topicContext, "--topic-check", "--require-drained");
+
+      assertThat(result.code()).isEqualTo(1);
+      assertThat(result.err()).isEmpty();
+      assertThat(result.out().lines().filter(line -> line.startsWith("I10 ")))
+          .containsExactly("I10 outbox=" + row.id() + " not published");
+      assertThat(result.out()).endsWith("invariants failed: 1 violations" + System.lineSeparator());
+    } finally {
+      drainOutbox();
+    }
+  }
+
+  @Test
+  void requireDrainedNeedsTopicCheck() {
+    CommandResult result = command(app(), "--require-drained");
+
+    assertThat(result.code()).isEqualTo(2);
+    assertThat(result.out()).isEmpty();
+    assertThat(result.err())
+        .isEqualTo("check failed: --require-drained needs --topic-check" + System.lineSeparator());
+  }
+
+  private static CommandResult command(ConfigurableApplicationContext context, String... flags) {
+    ByteArrayOutputStream standardOut = new ByteArrayOutputStream();
+    ByteArrayOutputStream standardErr = new ByteArrayOutputStream();
+    int code;
+    try (PrintStream out = new PrintStream(standardOut, true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(standardErr, true, StandardCharsets.UTF_8)) {
+      code = context.getBean(CheckCommand.class).run(flags, out, err);
+    }
+    return new CommandResult(
+        code,
+        standardOut.toString(StandardCharsets.UTF_8),
+        standardErr.toString(StandardCharsets.UTF_8));
+  }
+
+  private void drainOutbox() throws SQLException {
+    OutboxRelay relay = topicContext.getBean(OutboxRelay.class);
+    try {
+      while (relay.runOnce() != 0) {
+        // Drain the shared database, including rows left by other test classes.
+      }
+      try (Connection db = appJdbc()) {
+        assertThat(topicContext.getBean(OutboxStore.class).unpublishedCount(db)).isZero();
+      }
+    } finally {
+      relay.release();
+    }
+  }
+
+  private static void setPublishedAt(Connection db, long id, OffsetDateTime publishedAt)
+      throws SQLException {
+    try (PreparedStatement update =
+        db.prepareStatement("UPDATE ledger.outbox SET published_at = ? WHERE id = ?")) {
+      update.setObject(1, publishedAt);
+      update.setLong(2, id);
+      assertThat(update.executeUpdate()).isEqualTo(1);
+    }
+  }
+
   private UUID createAccount() throws Exception {
     var response = post("/v1/accounts", token(Role.OPERATOR), "{\"currency\":\"EUR\"}");
     assertThat(response.statusCode()).isEqualTo(201);
@@ -775,6 +910,8 @@ class InvariantCheckerIT extends LedgerIT {
   private static String key() {
     return UUID.randomUUID().toString();
   }
+
+  private record CommandResult(int code, String out, String err) {}
 
   private record EntryRow(long id, UUID accountId, long amount) {}
 
