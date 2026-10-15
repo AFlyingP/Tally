@@ -72,6 +72,64 @@
         },
         "type" : "object"
       },
+      "AuditPage" : {
+        "properties" : {
+          "items" : {
+            "items" : {
+              "$ref" : "#/components/schemas/AuditRow"
+            },
+            "type" : "array"
+          },
+          "next_cursor" : {
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "AuditRow" : {
+        "properties" : {
+          "action" : {
+            "type" : "string"
+          },
+          "actor" : {
+            "type" : "string"
+          },
+          "actor_role" : {
+            "type" : "string"
+          },
+          "id" : {
+            "format" : "uuid",
+            "type" : "string"
+          },
+          "occurred_at" : {
+            "format" : "date-time",
+            "type" : "string"
+          },
+          "outcome" : {
+            "type" : "string"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "request_id" : {
+            "type" : "string"
+          },
+          "resource_id" : {
+            "type" : "string"
+          },
+          "resource_type" : {
+            "type" : "string"
+          },
+          "scopes" : {
+            "type" : "string"
+          },
+          "transaction_id" : {
+            "format" : "uuid",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
       "Balance" : {
         "properties" : {
           "account_id" : {
@@ -1028,6 +1086,81 @@
         },
         "tags" : [
           "account-controller"
+        ]
+      }
+    },
+    "/v1/audit" : {
+      "get" : {
+        "description" : "scope: audit:read",
+        "operationId" : "query",
+        "parameters" : [
+          {
+            "in" : "query",
+            "name" : "resource_type",
+            "required" : false,
+            "schema" : {
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "resource_id",
+            "required" : false,
+            "schema" : {
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "from",
+            "required" : false,
+            "schema" : {
+              "format" : "date-time",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "to",
+            "required" : false,
+            "schema" : {
+              "format" : "date-time",
+              "type" : "string"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "limit",
+            "required" : false,
+            "schema" : {
+              "default" : 100,
+              "format" : "int32",
+              "type" : "integer"
+            }
+          },
+          {
+            "in" : "query",
+            "name" : "cursor",
+            "required" : false,
+            "schema" : {
+              "type" : "string"
+            }
+          }
+        ],
+        "responses" : {
+          "200" : {
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/AuditPage"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [
+          "audit-controller"
         ]
       }
     },

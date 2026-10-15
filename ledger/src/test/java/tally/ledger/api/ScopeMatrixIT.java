@@ -135,6 +135,7 @@ class ScopeMatrixIT extends LedgerIT {
         new Endpoint(
             "GET", "/v1/reconciliation/runs?business_date=2026-02-01", "", "recon:read", false));
     endpoints.add(new Endpoint("GET", "/v1/reconciliation/runs/" + runId, "", "recon:read", false));
+    endpoints.add(new Endpoint("GET", "/v1/audit", "", "audit:read", false));
 
     int combinations = 0;
     for (Endpoint endpoint : endpoints) {
@@ -166,7 +167,7 @@ class ScopeMatrixIT extends LedgerIT {
         combinations++;
       }
     }
-    assertThat(combinations).isEqualTo(120);
+    assertThat(combinations).isEqualTo(125);
   }
 
   private UUID create() {
