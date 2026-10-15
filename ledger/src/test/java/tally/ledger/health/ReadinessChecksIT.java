@@ -5,8 +5,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.kafka.KafkaContainer;
@@ -16,9 +22,10 @@ import tally.ledger.config.LedgerProperties;
 class ReadinessChecksIT {
 
   @Test
-  void kafkaCheckUpAndDown() {
+  void kafkaCheckUpAndDown() throws Exception {
     try (KafkaContainer kafka = new KafkaContainer("apache/kafka:4.2.2")) {
       kafka.start();
+      awaitBroker(kafka.getBootstrapServers());
       KafkaReadinessCheck up =
           new KafkaReadinessCheck(properties(kafka.getBootstrapServers(), "http://localhost:1"));
       assertThat(up.name()).isEqualTo("kafka");
@@ -34,6 +41,24 @@ class ReadinessChecksIT {
     KafkaReadinessCheck unresolvable =
         new KafkaReadinessCheck(properties("no-such-host.invalid:9092", "http://localhost:1"));
     assertThat(unresolvable.up()).isFalse();
+  }
+
+  private static void awaitBroker(String bootstrapServers) throws Exception {
+    long start = System.nanoTime();
+    try (AdminClient admin =
+        AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+      while (true) {
+        try {
+          admin.describeCluster().nodes().get(1, TimeUnit.SECONDS);
+          return;
+        } catch (ExecutionException | TimeoutException e) {
+          if (System.nanoTime() - start >= TimeUnit.SECONDS.toNanos(30)) {
+            throw new AssertionError("kafka broker not ready after 30 s", e);
+          }
+          Thread.sleep(200);
+        }
+      }
+    }
   }
 
   @Test

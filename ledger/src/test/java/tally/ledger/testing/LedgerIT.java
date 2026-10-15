@@ -60,6 +60,7 @@ public abstract class LedgerIT {
     Map<String, String> settings = new LinkedHashMap<>();
     settings.put("server.port", "0");
     settings.put("spring.datasource.url", POSTGRES.getJdbcUrl());
+    settings.put("spring.datasource.hikari.maximum-pool-size", "20");
     settings.put("spring.datasource.password", PASSWORD);
     settings.put("spring.flyway.password", PASSWORD);
     settings.put("tally.ledger.roles", "api");
