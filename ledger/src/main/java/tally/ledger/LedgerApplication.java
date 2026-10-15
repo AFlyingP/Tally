@@ -9,6 +9,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import tally.ledger.audit.VerifyCommand;
 import tally.ledger.check.CheckCommand;
 import tally.platform.web.DbReadinessCheck;
 
@@ -31,12 +32,17 @@ public class LedgerApplication {
   }
 
   static int command(String[] args, PrintStream out, PrintStream err) {
-    if (args[0].equals("check-invariants")) {
+    if (args[0].equals("check-invariants") || args[0].equals("verify-audit")) {
       try (ConfigurableApplicationContext context =
           builder()
               .web(WebApplicationType.NONE)
               .properties("spring.flyway.enabled=false", "spring.main.banner-mode=off")
               .run("--logging.level.root=WARN", "--logging.level.tally=WARN")) {
+        if (args[0].equals("verify-audit")) {
+          return context
+              .getBean(VerifyCommand.class)
+              .run(Arrays.copyOfRange(args, 1, args.length), out, err);
+        }
         return context
             .getBean(CheckCommand.class)
             .run(Arrays.copyOfRange(args, 1, args.length), out, err);

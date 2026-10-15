@@ -142,6 +142,29 @@ class LedgerStartIT extends LedgerIT {
     }
   }
 
+  @Test
+  void verifyAuditCommandRunsWithoutWebServer() {
+    app();
+    ByteArrayOutputStream standardOut = new ByteArrayOutputStream();
+    ByteArrayOutputStream standardErr = new ByteArrayOutputStream();
+    try {
+      System.setProperty("spring.datasource.url", POSTGRES.getJdbcUrl());
+      System.setProperty("spring.datasource.password", PASSWORD);
+      System.setProperty("tally.ledger.roles", "api");
+      try (PrintStream out = new PrintStream(standardOut, true, StandardCharsets.UTF_8);
+          PrintStream err = new PrintStream(standardErr, true, StandardCharsets.UTF_8)) {
+        assertThat(LedgerApplication.command(new String[] {"verify-audit"}, out, err)).isZero();
+        assertThat(standardErr.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(standardOut.toString(StandardCharsets.UTF_8).lines().findFirst())
+            .hasValueSatisfying(line -> assertThat(line).matches("audit chain ok: [0-9]+ rows"));
+      }
+    } finally {
+      System.clearProperty("spring.datasource.url");
+      System.clearProperty("spring.datasource.password");
+      System.clearProperty("tally.ledger.roles");
+    }
+  }
+
   private static String errorCode(HttpResponse<String> response) {
     JsonNode error = JSON.readTree(response.body()).get("error");
     return error.get("code").asString();
