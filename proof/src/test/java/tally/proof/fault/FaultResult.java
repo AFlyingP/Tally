@@ -26,7 +26,12 @@ public record FaultResult(
     int duplicatePostings,
     int missingPostings,
     List<Violation> violations,
-    long balanceSum) {
+    long balanceSum,
+    Integer duplicateScheduled,
+    Integer missingEvents,
+    Integer duplicateEvents,
+    Map<String, Integer> paymentStates,
+    Long createdOrLost) {
 
   public static FaultResult collect(
       Scenario s, String strategy, FaultStack stack, LoadDriver driver) {
@@ -86,7 +91,12 @@ public record FaultResult(
           duplicatePostings,
           missingPostings,
           stack.checker(),
-          balanceSum);
+          balanceSum,
+          null,
+          null,
+          null,
+          null,
+          null);
     } catch (SQLException e) {
       throw new IllegalStateException("failed to read fault results", e);
     }
@@ -98,5 +108,10 @@ public record FaultResult(
     assertThat(missingPostings).as("posting outcomes").isZero();
     assertThat(violations).as("ledger invariants").isEmpty();
     assertThat(balanceSum).as("customer balances").isEqualTo(5_000_000L);
+    assertThat(duplicateScheduled == null || duplicateScheduled == 0)
+        .as("duplicate scheduled transactions")
+        .isTrue();
+    assertThat(missingEvents == null || missingEvents == 0).as("missing events").isTrue();
+    assertThat(createdOrLost == null || createdOrLost == 0).as("created or lost money").isTrue();
   }
 }
