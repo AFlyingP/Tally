@@ -19,7 +19,8 @@ public record LedgerProperties(
     Scheduler scheduler,
     Payments payments,
     Relay relay,
-    Recon recon) {
+    Recon recon,
+    Sealer sealer) {
 
   public static final Set<String> KNOWN_ROLES =
       Set.of("api", "scheduler", "orchestrator", "relay", "expiry", "recon", "sealer");
@@ -102,6 +103,15 @@ public record LedgerProperties(
     public Recon {
       if (timeUtc == null || timeUtc.getSecond() != 0 || timeUtc.getNano() != 0) {
         throw invalid("tally.ledger.recon.time-utc", "must be a valid HH:mm time");
+      }
+    }
+  }
+
+  public record Sealer(long pollMs) {
+
+    public Sealer {
+      if (pollMs < 50 || pollMs > 60000) {
+        throw invalid("tally.ledger.sealer.poll-ms", "must be between 50 and 60000");
       }
     }
   }

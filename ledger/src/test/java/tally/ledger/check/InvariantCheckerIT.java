@@ -322,14 +322,67 @@ class InvariantCheckerIT extends LedgerIT {
     AuditRow audit = auditRow(transaction);
     List<Violation> violations;
 
-    try (Connection db = superJdbc()) {
-      setTrigger(db, "audit_log", "audit_log_no_update", false);
+    try (Connection db = superJdbc();
+        Statement statement = db.createStatement()) {
+      boolean wasPending;
+      boolean wasSealed;
+      try (PreparedStatement select =
+          db.prepareStatement(
+              """
+          SELECT EXISTS (SELECT 1 FROM ledger.audit_pending WHERE audit_id = ?),
+                 EXISTS (SELECT 1 FROM ledger.audit_chain WHERE audit_id = ?)
+          """)) {
+        select.setObject(1, audit.id());
+        select.setObject(2, audit.id());
+        try (ResultSet row = select.executeQuery()) {
+          assertThat(row.next()).isTrue();
+          wasPending = row.getBoolean(1);
+          wasSealed = row.getBoolean(2);
+        }
+      }
+      boolean foreignKeyDropped = false;
+      boolean auditDeleted = false;
       try {
-        deleteAudit(db, audit.id());
+        if (wasSealed) {
+          statement.execute(
+              "ALTER TABLE ledger.audit_chain DROP CONSTRAINT audit_chain_audit_id_fkey");
+          foreignKeyDropped = true;
+        }
+        try (PreparedStatement delete =
+            db.prepareStatement("DELETE FROM ledger.audit_pending WHERE audit_id = ?")) {
+          delete.setObject(1, audit.id());
+          delete.executeUpdate();
+        }
+        setTrigger(db, "audit_log", "audit_log_no_update", false);
+        try {
+          deleteAudit(db, audit.id());
+          auditDeleted = true;
+        } finally {
+          setTrigger(db, "audit_log", "audit_log_no_update", true);
+        }
         violations = check();
       } finally {
-        restoreAudit(db, audit);
-        setTrigger(db, "audit_log", "audit_log_no_update", true);
+        try {
+          if (auditDeleted) {
+            restoreAudit(db, audit);
+          }
+          String restorePending =
+              wasPending
+                  ? "INSERT INTO ledger.audit_pending (audit_id) VALUES (?) ON CONFLICT DO NOTHING"
+                  : "DELETE FROM ledger.audit_pending WHERE audit_id = ?";
+          try (PreparedStatement restore = db.prepareStatement(restorePending)) {
+            restore.setObject(1, audit.id());
+            restore.executeUpdate();
+          }
+        } finally {
+          if (foreignKeyDropped) {
+            statement.execute(
+                """
+                ALTER TABLE ledger.audit_chain ADD CONSTRAINT audit_chain_audit_id_fkey
+                FOREIGN KEY (audit_id) REFERENCES ledger.audit_log (id)
+                """);
+          }
+        }
       }
     }
 

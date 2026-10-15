@@ -106,6 +106,7 @@ class ReadinessChecksIT {
         new LedgerProperties.Payments(
             500, 30000, new long[] {5000, 10000, 20000, 40000, 75000, 120000, 150000, 180000}),
         new LedgerProperties.Relay(200, 500),
-        new LedgerProperties.Recon(LocalTime.of(0, 30)));
+        new LedgerProperties.Recon(LocalTime.of(0, 30)),
+        new LedgerProperties.Sealer(500));
   }
 }
