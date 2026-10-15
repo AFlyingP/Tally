@@ -38,6 +38,7 @@ public final class LoadDriver {
   }
 
   private static final int ACCOUNT_COUNT = 50;
+  private static final long ACCOUNT_FUNDING = 100_000L;
   private static final int BURST_SIZE = 10;
   private static final JsonMapper JSON = JsonMapper.builder().build();
 
@@ -60,6 +61,7 @@ public final class LoadDriver {
   private final Set<String> resent = ConcurrentHashMap.newKeySet();
   private final ConcurrentLinkedQueue<String> failures = new ConcurrentLinkedQueue<>();
   private int burstEvery;
+  private long deposited;
 
   private record Operation(String key, HttpRequest request) {}
 
@@ -105,8 +107,10 @@ public final class LoadDriver {
                     "/v1/deposits",
                     runId + "-setup-" + (2 * index + 1),
                     JSON.writeValueAsString(
-                        Map.of("account_id", account, "amount", 100_000, "currency", "EUR"))));
+                        Map.of(
+                            "account_id", account, "amount", ACCOUNT_FUNDING, "currency", "EUR"))));
         assertThat(funded.status()).as("deposit response: %s", funded.body()).isEqualTo(201);
+        deposited += ACCOUNT_FUNDING;
       }
     } catch (IOException e) {
       throw new UncheckedIOException("setup request failed", e);
@@ -189,6 +193,10 @@ public final class LoadDriver {
 
   public List<UUID> accounts() {
     return List.copyOf(accounts);
+  }
+
+  public long deposited() {
+    return deposited;
   }
 
   public String runId() {

@@ -53,6 +53,7 @@ import org.testcontainers.utility.MountableFile;
 import tally.ledger.check.InvariantChecker;
 import tally.ledger.check.TopicCheck;
 import tally.ledger.check.Violation;
+import tally.ledger.outbox.OutboxStore;
 import tally.platform.testing.TestIssuer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -392,9 +393,14 @@ public final class FaultStack implements AutoCloseable {
       List<Violation> violations = new ArrayList<>(checker.check(connection));
       if (topicCheck) {
         container(Part.KAFKA);
+        connection.setAutoCommit(false);
+        connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+        // Keep the published set fixed before the relay can add more topic records.
+        new OutboxStore().publishedEventIds(connection);
         TopicCheck.Snapshot snapshot =
             TopicCheck.read(kafkaBootstrap(), "tally.transactions.v1", Duration.ofSeconds(30));
         violations.addAll(checker.checkTopic(connection, snapshot, requireDrained));
+        connection.commit();
       }
       return List.copyOf(violations);
     }

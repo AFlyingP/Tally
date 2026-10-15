@@ -35,6 +35,68 @@ public final class PaymentScenarios {
   private static final JsonMapper JSON = JsonMapper.builder().build();
   private static final Duration POLL_INTERVAL = Duration.ofMillis(50);
   private static final long PAYMENT_AMOUNT = 1_000;
+  // UNION counts each row once even when several independent links identify it.
+  private static final String PAYMENT_COUNTS =
+      """
+      WITH payments AS (
+        SELECT * FROM ledger.external_payment WHERE id = ANY(?)
+      ), payment_audits AS (
+        SELECT p.id AS payment_id, a.id, a.action, a.transaction_id
+        FROM payments p JOIN ledger.audit_log a
+          ON a.resource_type = 'external_payment' AND a.resource_id = p.id::text
+        UNION
+        SELECT p.id, a.id, a.action, a.transaction_id
+        FROM payments p JOIN ledger.audit_log a ON a.request_id = p.request_id
+        UNION
+        SELECT p.id, a.id, a.action, a.transaction_id
+        FROM payments p JOIN ledger.payment_event e ON e.payment_id = p.id
+        JOIN ledger.audit_log a ON a.id = e.audit_id
+      ), payment_holds AS (
+        SELECT p.id AS payment_id, h.id
+        FROM payments p JOIN ledger.hold h ON h.id = p.hold_id
+        UNION
+        SELECT p.id, h.id
+        FROM payments p JOIN ledger.idempotency_key k
+          ON k.client_id = 'job:orchestrator' AND k.key = 'pay:' || p.id::text || ':hold'
+        JOIN ledger.hold h ON h.idempotency_key_id = k.id
+        UNION
+        SELECT a.payment_id, e.hold_id
+        FROM payment_audits a JOIN ledger.hold_event e ON e.audit_id = a.id
+        WHERE a.action = 'payment.hold' AND e.type = 'PLACED'
+      ), payment_transactions AS (
+        SELECT p.id AS payment_id, t.id, t.kind
+        FROM payments p JOIN ledger.ledger_transaction t
+          ON t.id IN (p.capture_transaction_id, p.resolution_transaction_id)
+        UNION
+        SELECT p.id, t.id, t.kind
+        FROM payments p JOIN ledger.ledger_transaction t ON t.request_id = p.request_id
+        UNION
+        SELECT p.id, t.id, t.kind
+        FROM payments p JOIN ledger.idempotency_key k
+          ON k.client_id = 'job:orchestrator' AND k.key LIKE 'pay:' || p.id::text || ':%'
+        JOIN ledger.ledger_transaction t ON t.idempotency_key_id = k.id
+        UNION
+        SELECT a.payment_id, t.id, t.kind
+        FROM payment_audits a JOIN ledger.ledger_transaction t ON t.id = a.transaction_id
+        UNION
+        SELECT ph.payment_id, t.id, t.kind
+        FROM payment_holds ph JOIN ledger.hold h ON h.id = ph.id
+        JOIN ledger.ledger_transaction t ON t.id = h.capture_transaction_id
+        UNION
+        SELECT ph.payment_id, t.id, t.kind
+        FROM payment_holds ph JOIN ledger.hold_event e ON e.hold_id = ph.id
+        JOIN ledger.ledger_transaction t ON t.id = e.transaction_id
+      )
+      SELECT p.id,
+        (SELECT count(*) FROM payment_holds h WHERE h.payment_id = p.id) AS holds,
+        count(t.id) FILTER (WHERE t.kind = 'HOLD_CAPTURE') AS captures,
+        count(t.id) FILTER (WHERE t.kind = 'EXTERNAL_SETTLEMENT') AS settlements,
+        count(t.id) FILTER (WHERE t.kind = 'EXTERNAL_COMPENSATION') AS compensations,
+        count(t.id) FILTER (WHERE t.kind NOT IN
+          ('HOLD_CAPTURE', 'EXTERNAL_SETTLEMENT', 'EXTERNAL_COMPENSATION')) AS unexpected
+      FROM payments p LEFT JOIN payment_transactions t ON t.payment_id = p.id
+      GROUP BY p.id
+      """;
 
   private PaymentScenarios() {}
 
@@ -224,6 +286,7 @@ public final class PaymentScenarios {
     List<UUID> paymentIds = new ArrayList<>();
     List<String> creditors = new ArrayList<>();
     try {
+      long initialClearingBalance = clearingBalance(stack);
       clearExtbankRules(stack);
       driver.setup();
       for (int index = 0; index < sourceCount; index++) {
@@ -290,7 +353,8 @@ public final class PaymentScenarios {
               driver.accounts(),
               sources,
               paymentIds,
-              5_000_000L + sourceFunding * sourceCount);
+              driver.deposited() + sourceFunding * sourceCount,
+              initialClearingBalance);
       assertThat(createdOrLost).as("created or lost money").isZero();
       assertThat(stack.checker(false, false)).as("external payment invariants").isEmpty();
       FaultResult result = FaultResult.collect(Scenario.EXTBANK_FAULTS, strategy, stack, driver);
@@ -616,28 +680,46 @@ public final class PaymentScenarios {
   private static void assertNoDuplicatePaymentTransactions(FaultStack stack, List<UUID> paymentIds)
       throws SQLException {
     try (Connection connection = stack.jdbc();
-        PreparedStatement query =
-            connection.prepareStatement(
-                "SELECT p.id, t.kind, count(*) FROM ledger.external_payment p"
-                    + " JOIN ledger.idempotency_key k ON k.client_id = 'job:orchestrator'"
-                    + " AND k.key LIKE 'pay:' || p.id::text || ':%'"
-                    + " JOIN ledger.ledger_transaction t ON t.idempotency_key_id = k.id"
-                    + " WHERE p.id = ANY(?) GROUP BY p.id, t.kind")) {
+        PreparedStatement query = connection.prepareStatement(PAYMENT_COUNTS)) {
       Array ids = connection.createArrayOf("uuid", paymentIds.toArray(UUID[]::new));
       try {
         query.setArray(1, ids);
+        int checked = 0;
         try (ResultSet rows = query.executeQuery()) {
           while (rows.next()) {
-            assertThat(rows.getInt(3))
-                .as("transactions of kind %s for payment %s", rows.getString(2), rows.getObject(1))
+            UUID paymentId = rows.getObject("id", UUID.class);
+            for (String kind : List.of("captures", "settlements", "compensations")) {
+              assertThat(rows.getLong(kind))
+                  .as("%s for payment %s", kind, paymentId)
+                  .isLessThanOrEqualTo(1);
+            }
+            assertThat(rows.getLong("settlements") + rows.getLong("compensations"))
+                .as("settlement or compensation count for payment %s", paymentId)
                 .isLessThanOrEqualTo(1);
-            assertThat(rows.getString(2))
-                .isIn("HOLD_CAPTURE", "EXTERNAL_SETTLEMENT", "EXTERNAL_COMPENSATION");
+            assertThat(rows.getLong("unexpected"))
+                .as("unexpected transaction kinds for payment %s", paymentId)
+                .isZero();
+            checked++;
           }
         }
+        assertThat(checked)
+            .as("payments checked for duplicate transactions")
+            .isEqualTo(paymentIds.size());
       } finally {
         ids.free();
       }
+    }
+  }
+
+  private static long clearingBalance(FaultStack stack) throws SQLException {
+    try (Connection connection = stack.jdbc();
+        PreparedStatement query =
+            connection.prepareStatement(
+                "SELECT coalesce(sum(balance), 0) FROM ledger.account"
+                    + " WHERE kind = 'CLEARING' AND currency = 'EUR'");
+        ResultSet rows = query.executeQuery()) {
+      rows.next();
+      return rows.getLong(1);
     }
   }
 
@@ -646,7 +728,8 @@ public final class PaymentScenarios {
       List<UUID> loadAccounts,
       List<UUID> sources,
       List<UUID> paymentIds,
-      long deposits)
+      long deposits,
+      long initialClearingBalance)
       throws SQLException {
     Set<UUID> accountIds = new HashSet<>(loadAccounts);
     accountIds.addAll(sources);
@@ -682,7 +765,8 @@ public final class PaymentScenarios {
           rows.next();
           settledAmount = rows.getLong(1);
         }
-        return Math.abs(deposits - (customerBalance + clearingBalance + settledAmount));
+        long clearingChange = clearingBalance - initialClearingBalance;
+        return Math.abs(deposits - (customerBalance + clearingChange + settledAmount));
       } finally {
         accountArray.free();
         paymentArray.free();
@@ -693,25 +777,19 @@ public final class PaymentScenarios {
   private static void assertEachPaymentExactlyOnce(FaultStack stack, List<UUID> paymentIds)
       throws SQLException {
     try (Connection connection = stack.jdbc();
-        PreparedStatement query =
-            connection.prepareStatement(
-                "SELECT p.id, p.external_reference,"
-                    + " (SELECT count(*) FROM ledger.hold h WHERE h.id = p.hold_id),"
-                    + " (SELECT count(*) FROM ledger.ledger_transaction t"
-                    + " WHERE t.id = p.capture_transaction_id AND t.kind = 'HOLD_CAPTURE'),"
-                    + " (SELECT count(*) FROM ledger.ledger_transaction t"
-                    + " WHERE t.id = p.resolution_transaction_id AND t.kind = 'EXTERNAL_SETTLEMENT')"
-                    + " FROM ledger.external_payment p WHERE p.id = ANY(?)")) {
+        PreparedStatement query = connection.prepareStatement(PAYMENT_COUNTS)) {
       Array ids = connection.createArrayOf("uuid", paymentIds.toArray(UUID[]::new));
       try {
         query.setArray(1, ids);
         int checked = 0;
         try (ResultSet rows = query.executeQuery()) {
           while (rows.next()) {
-            UUID paymentId = rows.getObject(1, UUID.class);
-            assertThat(rows.getInt(3)).as("hold count for %s", paymentId).isEqualTo(1);
-            assertThat(rows.getInt(4)).as("capture count for %s", paymentId).isEqualTo(1);
-            assertThat(rows.getInt(5)).as("settlement count for %s", paymentId).isEqualTo(1);
+            UUID paymentId = rows.getObject("id", UUID.class);
+            assertThat(rows.getLong("holds")).as("hold count for %s", paymentId).isEqualTo(1);
+            assertThat(rows.getLong("captures")).as("capture count for %s", paymentId).isEqualTo(1);
+            assertThat(rows.getLong("settlements"))
+                .as("settlement count for %s", paymentId)
+                .isEqualTo(1);
             checked++;
           }
         }
