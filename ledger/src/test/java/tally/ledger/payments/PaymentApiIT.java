@@ -48,7 +48,7 @@ class PaymentApiIT extends LedgerIT {
     assertThat(replay.body()).isEqualTo(first.body());
     assertThat(replay.headers().firstValue("Idempotent-Replay")).contains("true");
     UUID id = UUID.fromString(JSON.readTree(first.body()).get("id").asString());
-    assertThat(paymentCount(id)).isEqualTo(1);
+    assertThat(paymentCountForSource(account)).isEqualTo(1);
     assertThat(eventCount(id)).isEqualTo(1);
     assertThat(auditCount(id)).isEqualTo(1);
   }
@@ -116,8 +116,9 @@ class PaymentApiIT extends LedgerIT {
     }
   }
 
-  private long paymentCount(UUID id) throws Exception {
-    return count("SELECT count(*) FROM ledger.external_payment WHERE id = ?", id);
+  private long paymentCountForSource(UUID source) throws Exception {
+    return count(
+        "SELECT count(*) FROM ledger.external_payment WHERE source_account_id = ?", source);
   }
 
   private long eventCount(UUID id) throws Exception {

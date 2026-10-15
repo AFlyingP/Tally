@@ -175,7 +175,7 @@ class ScheduleIT extends LedgerIT {
     assertThat(replay.body()).isEqualTo(first.body());
     assertThat(replay.headers().firstValue("Idempotent-Replay")).contains("true");
     UUID id = UUID.fromString(JSON.readTree(first.body()).get("id").asString());
-    assertThat(scheduleCount(id)).isEqualTo(1);
+    assertThat(scheduleCountForSource(source)).isEqualTo(1);
     assertThat(occurrenceCount(id)).isEqualTo(1);
   }
 
@@ -323,8 +323,8 @@ class ScheduleIT extends LedgerIT {
     }
   }
 
-  private long scheduleCount(UUID id) throws SQLException {
-    return count("SELECT count(*) FROM ledger.schedule WHERE id = ?", id);
+  private long scheduleCountForSource(UUID source) throws SQLException {
+    return count("SELECT count(*) FROM ledger.schedule WHERE source_account_id = ?", source);
   }
 
   private long occurrenceCount(UUID id) throws SQLException {
