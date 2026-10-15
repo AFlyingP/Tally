@@ -53,6 +53,42 @@ public sealed interface Op {
     }
   }
 
+  record PlaceHold(int account, long amount, int ttlSeconds) implements Op {
+    public PlaceHold {
+      requireNonNegative(account);
+    }
+  }
+
+  record CaptureHold(int pick, long amount, int destination) implements Op {
+    public CaptureHold {
+      requireNonNegative(pick);
+      requireNonNegative(destination);
+    }
+  }
+
+  record ReleaseHold(int pick) implements Op {
+    public ReleaseHold {
+      requireNonNegative(pick);
+    }
+  }
+
+  record AdvanceClock(int seconds) implements Op {}
+
+  record CreateSchedule(int source, int destination, long amount, boolean daily, int startInSeconds)
+      implements Op {
+    public CreateSchedule {
+      requireNonNegative(source);
+      requireNonNegative(destination);
+    }
+  }
+
+  record CreatePayment(int account, long amount, int behaviour) implements Op {
+    public CreatePayment {
+      requireNonNegative(account);
+      requireNonNegative(behaviour);
+    }
+  }
+
   private static void requireNonNegative(int value) {
     if (value < 0) {
       throw new IllegalArgumentException("index must be non-negative");

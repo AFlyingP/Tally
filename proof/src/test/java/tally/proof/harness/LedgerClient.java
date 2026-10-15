@@ -2,6 +2,7 @@ package tally.proof.harness;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -109,6 +110,91 @@ public final class LedgerClient {
 
   public Http.Response transaction(UUID transaction) {
     return Http.get(baseUrl + "/v1/transactions/" + transaction, token);
+  }
+
+  public Http.Response placeHold(String key, UUID account, long amount, Instant expiresAt) {
+    return Http.post(
+        baseUrl + "/v1/holds",
+        token,
+        JSON.writeValueAsString(
+            Map.of(
+                "account_id", account,
+                "amount", amount,
+                "currency", "EUR",
+                "expires_at", expiresAt)),
+        "Idempotency-Key",
+        key);
+  }
+
+  public Http.Response captureHold(String key, UUID hold, long amount, UUID destination) {
+    return Http.post(
+        baseUrl + "/v1/holds/" + hold + "/capture",
+        token,
+        JSON.writeValueAsString(Map.of("amount", amount, "destination_account_id", destination)),
+        "Idempotency-Key",
+        key);
+  }
+
+  public Http.Response releaseHold(String key, UUID hold) {
+    return Http.post(
+        baseUrl + "/v1/holds/" + hold + "/release", token, "{}", "Idempotency-Key", key);
+  }
+
+  public Http.Response hold(UUID hold) {
+    return Http.get(baseUrl + "/v1/holds/" + hold, token);
+  }
+
+  public Http.Response createSchedule(
+      String key, UUID source, UUID destination, long amount, String frequency, Instant startAt) {
+    return Http.post(
+        baseUrl + "/v1/schedules",
+        token,
+        JSON.writeValueAsString(
+            Map.of(
+                "source_account_id",
+                source,
+                "destination_account_id",
+                destination,
+                "amount",
+                amount,
+                "currency",
+                "EUR",
+                "frequency",
+                frequency,
+                "start_at",
+                startAt)),
+        "Idempotency-Key",
+        key);
+  }
+
+  public Http.Response occurrences(UUID schedule) {
+    return Http.get(baseUrl + "/v1/schedules/" + schedule + "/occurrences", token);
+  }
+
+  public Http.Response cancelSchedule(UUID schedule) {
+    return Http.post(baseUrl + "/v1/schedules/" + schedule + "/cancel", token, "{}");
+  }
+
+  public Http.Response createPayment(String key, UUID source, long amount, String creditorAccount) {
+    return Http.post(
+        baseUrl + "/v1/external-payments",
+        token,
+        JSON.writeValueAsString(
+            Map.of(
+                "source_account_id",
+                source,
+                "amount",
+                amount,
+                "currency",
+                "EUR",
+                "creditor_account",
+                creditorAccount)),
+        "Idempotency-Key",
+        key);
+  }
+
+  public Http.Response payment(UUID payment) {
+    return Http.get(baseUrl + "/v1/external-payments/" + payment, token);
   }
 
   public static String errorCode(Http.Response response) {

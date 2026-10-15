@@ -3,6 +3,7 @@ package tally.proof.harness;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.context.ConfigurableApplicationContext;
 import tally.ledger.LedgerApplication;
@@ -22,19 +23,24 @@ public final class InProcessLedger {
   }
 
   public static InProcessLedger start(String strategy, Clock clock, Class<?>... extraConfig) {
+    return start(strategy, clock, (InProcessExtbank) null, extraConfig);
+  }
+
+  public static InProcessLedger start(
+      String strategy, Clock clock, InProcessExtbank extbankOrNull, Class<?>... extraConfig) {
     Postgres postgres = Postgres.shared();
-    try {
-      postgres.reset();
-    } catch (SQLException e) {
-      throw new IllegalStateException("failed to reset database", e);
+    if (extbankOrNull == null) {
+      try {
+        postgres.reset();
+      } catch (SQLException e) {
+        throw new IllegalStateException("failed to reset database", e);
+      }
     }
     TestIssuer issuer = TestIssuer.start();
     try {
-      ConfigurableApplicationContext context =
-          LedgerApplication.builder()
-              .sources(extraConfig)
-              .initializers(ctx -> ctx.getBeanFactory().registerSingleton("clock", clock))
-              .run(
+      List<String> arguments =
+          new ArrayList<>(
+              List.of(
                   "--server.port=0",
                   "--spring.datasource.url=" + postgres.jdbcUrl(),
                   "--spring.datasource.password=test-password",
@@ -42,7 +48,17 @@ public final class InProcessLedger {
                   "--tally.ledger.strategy=" + strategy,
                   "--tally.ledger.roles=api",
                   "--tally.auth.jwks-uri=" + issuer.jwksUri(),
-                  "--tally.auth.issuer=" + issuer.issuer());
+                  "--tally.auth.issuer=" + issuer.issuer()));
+      if (extbankOrNull != null) {
+        arguments.add("--tally.ledger.extbank.url=" + extbankOrNull.url());
+        arguments.add("--tally.ledger.extbank.api-key=" + extbankOrNull.apiKey());
+        arguments.add("--tally.ledger.extbank.timeout-ms=2000");
+      }
+      ConfigurableApplicationContext context =
+          LedgerApplication.builder()
+              .sources(extraConfig)
+              .initializers(ctx -> ctx.getBeanFactory().registerSingleton("clock", clock))
+              .run(arguments.toArray(String[]::new));
       return new InProcessLedger(context, issuer);
     } catch (RuntimeException e) {
       issuer.close();
