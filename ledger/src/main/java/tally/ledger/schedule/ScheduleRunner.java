@@ -147,11 +147,9 @@ public final class ScheduleRunner implements Job {
               PostResult result = post(tx, occurrence, caller, requestId, now);
               if (result == PostResult.ALREADY_POSTED) {
                 advance(tx.connection(), occurrence, now);
-              } else {
+              } else if (result == PostResult.TERMINAL) {
                 Failpoints.hit("scheduler.before_commit");
-                if (result == PostResult.TERMINAL) {
-                  advance(tx.connection(), occurrence, now);
-                }
+                advance(tx.connection(), occurrence, now);
               }
               return true;
             })
