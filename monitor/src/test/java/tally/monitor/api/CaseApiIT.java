@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -40,12 +41,26 @@ class CaseApiIT extends MonitorIT {
     Fixture first = addAlert(accountId, Rule.R1, BASE);
     Fixture second = addAlert(accountId, Rule.R1, BASE.plusSeconds(172800));
     Fixture third = addAlert(accountId, Rule.R1, BASE.plusSeconds(345600));
+    try (Connection connection = superJdbc();
+        PreparedStatement update =
+            connection.prepareStatement(
+                "UPDATE monitor.case_file SET opened_at = ? WHERE id = ?")) {
+      update.setTimestamp(1, Timestamp.from(BASE));
+      update.setObject(2, second.caseId());
+      update.executeUpdate();
+      update.setTimestamp(1, Timestamp.from(BASE.plusSeconds(1)));
+      update.setObject(2, third.caseId());
+      update.executeUpdate();
+      update.setTimestamp(1, Timestamp.from(BASE.plusSeconds(2)));
+      update.setObject(2, first.caseId());
+      update.executeUpdate();
+    }
 
     JsonNode items =
         json(get("/v1/cases?status=OPEN&account_id=" + accountId, token(Role.COMPLIANCE)))
             .path("items");
 
-    assertThat(ids(items)).containsExactly(first.caseId(), second.caseId(), third.caseId());
+    assertThat(ids(items)).containsExactly(second.caseId(), third.caseId(), first.caseId());
     assertThat(items.size()).isEqualTo(3);
   }
 
@@ -282,6 +297,7 @@ class CaseApiIT extends MonitorIT {
       Fixture fixture = addAlert(newAccount(), Rule.R1, BASE.plusSeconds(attempt * 172800L));
       CountDownLatch ready = new CountDownLatch(2);
       CountDownLatch start = new CountDownLatch(1);
+      int assignStatus;
       try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
         Future<HttpResponse<String>> close =
             executor.submit(
@@ -309,6 +325,7 @@ class CaseApiIT extends MonitorIT {
         HttpResponse<String> assignResponse = assign.get(20, TimeUnit.SECONDS);
         assertThat(closeResponse.statusCode()).isEqualTo(200);
         assertThat(assignResponse.statusCode()).isIn(200, 422);
+        assignStatus = assignResponse.statusCode();
         if (assignResponse.statusCode() == 422) {
           assertThat(json(assignResponse).path("error").path("code").asString())
               .isEqualTo("CASE_CLOSED");
@@ -324,6 +341,13 @@ class CaseApiIT extends MonitorIT {
         }
       }
       assertThat(closedEvents).isEqualTo(1);
+      if (assignStatus == 200) {
+        List<String> eventTypes = new ArrayList<>();
+        for (JsonNode event : detail.path("events")) {
+          eventTypes.add(event.path("type").asString());
+        }
+        assertThat(eventTypes).containsSubsequence("ASSIGNED", "CLOSED");
+      }
     }
   }
 
