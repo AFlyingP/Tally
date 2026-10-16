@@ -31,7 +31,8 @@ public record FaultResult(
     Integer missingEvents,
     Integer duplicateEvents,
     Map<String, Integer> paymentStates,
-    Long createdOrLost) {
+    Long createdOrLost,
+    Map<String, Integer> monitor) {
 
   public static FaultResult collect(
       Scenario s, String strategy, FaultStack stack, LoadDriver driver) {
@@ -92,6 +93,7 @@ public record FaultResult(
           missingPostings,
           stack.checker(),
           balanceSum,
+          null,
           null,
           null,
           null,

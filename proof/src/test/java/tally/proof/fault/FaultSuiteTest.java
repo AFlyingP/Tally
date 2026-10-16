@@ -32,7 +32,7 @@ class FaultSuiteTest {
     Assumptions.assumeTrue(selectedStrategy == null || selectedStrategy.equals(strategy));
     Seeds.print("fault");
     Sizes sizes = Sizes.current();
-    List<Integer> scenarios = List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    List<Integer> scenarios = List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
     String selectedScenario = System.getProperty("proof.scenario");
     if (selectedScenario != null) {
       int id = Integer.parseInt(selectedScenario);
@@ -43,32 +43,44 @@ class FaultSuiteTest {
         for (int run = 0; run < sizes.faultRuns(); run++) {
           try {
             FaultResult result = runScenario(scenario, stack, strategy, sizes, Seeds.seed() + run);
-            String fields =
-                "scenario="
-                    + scenario
-                    + " strategy="
-                    + strategy
-                    + " operations="
-                    + result.operations()
-                    + " posted="
-                    + result.posted()
-                    + " rejected="
-                    + result.rejected()
-                    + " duplicates="
-                    + result.duplicatePostings()
-                    + " violations="
-                    + result.violations().size();
-            if (result.duplicateScheduled() != null) {
-              fields += " sched_duplicates=" + result.duplicateScheduled();
+            if (scenario == 11) {
+              System.out.println(
+                  "scenario=11 strategy="
+                      + strategy
+                      + " missing_alerts="
+                      + result.monitor().get("missing_alerts")
+                      + " extra_alerts="
+                      + result.monitor().get("extra_alerts")
+                      + " duplicate_alerts="
+                      + result.monitor().get("duplicate_alerts"));
+            } else {
+              String fields =
+                  "scenario="
+                      + scenario
+                      + " strategy="
+                      + strategy
+                      + " operations="
+                      + result.operations()
+                      + " posted="
+                      + result.posted()
+                      + " rejected="
+                      + result.rejected()
+                      + " duplicates="
+                      + result.duplicatePostings()
+                      + " violations="
+                      + result.violations().size();
+              if (result.duplicateScheduled() != null) {
+                fields += " sched_duplicates=" + result.duplicateScheduled();
+              }
+              if (result.missingEvents() != null) {
+                fields += " missing_events=" + result.missingEvents();
+              }
+              if (result.duplicateEvents() != null) {
+                fields += " duplicate_events=" + result.duplicateEvents();
+              }
+              System.out.println(fields);
+              result.assertClean();
             }
-            if (result.missingEvents() != null) {
-              fields += " missing_events=" + result.missingEvents();
-            }
-            if (result.duplicateEvents() != null) {
-              fields += " duplicate_events=" + result.duplicateEvents();
-            }
-            System.out.println(fields);
-            result.assertClean();
           } finally {
             stopWorkers(stack);
           }
@@ -90,6 +102,7 @@ class FaultSuiteTest {
       case 8 -> PaymentScenarios.brokerRestart(stack, strategy, sizes, seed);
       case 9 -> PaymentScenarios.extbankFaults(stack, strategy, sizes, seed);
       case 10 -> PaymentScenarios.orchestratorKill(stack, strategy, sizes, seed);
+      case 11 -> MonitorScenario.monitorKill(stack, strategy, sizes, seed);
       default -> throw new IllegalArgumentException("unknown fault scenario: " + scenario);
     };
   }
@@ -108,6 +121,10 @@ class FaultSuiteTest {
     if (scenarios.contains(9) || scenarios.contains(10)) {
       parts.add(FaultStack.Part.EXTBANK);
       parts.add(FaultStack.Part.WORKER);
+    }
+    if (scenarios.contains(11)) {
+      parts.add(FaultStack.Part.KAFKA);
+      parts.add(FaultStack.Part.MONITOR);
     }
     return parts;
   }

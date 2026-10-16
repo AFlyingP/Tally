@@ -858,7 +858,8 @@ public final class PaymentScenarios {
         null,
         null,
         paymentStates,
-        createdOrLost);
+        createdOrLost,
+        null);
   }
 
   private static FaultResult withMeasurements(
@@ -881,7 +882,8 @@ public final class PaymentScenarios {
         missingEvents,
         duplicateEvents,
         result.paymentStates(),
-        result.createdOrLost());
+        result.createdOrLost(),
+        null);
   }
 
   private static void stopWorkers(FaultStack stack) {
