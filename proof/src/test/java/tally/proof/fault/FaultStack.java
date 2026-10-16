@@ -440,19 +440,7 @@ public final class FaultStack implements AutoCloseable {
   public void awaitMonitorCaughtUp(Duration timeout) {
     AtomicReference<Map<TopicPartition, String>> lagging = new AtomicReference<>(Map.of());
     try (AdminClient admin = adminClient()) {
-      List<TopicPartition> partitions =
-          admin
-              .describeTopics(List.of(MONITOR_TOPIC))
-              .allTopicNames()
-              .get()
-              .get(MONITOR_TOPIC)
-              .partitions()
-              .stream()
-              .map(partition -> new TopicPartition(MONITOR_TOPIC, partition.partition()))
-              .toList();
-      Map<TopicPartition, OffsetSpec> offsetsRequest =
-          partitions.stream()
-              .collect(Collectors.toMap(partition -> partition, p -> OffsetSpec.latest()));
+      List<TopicPartition> partitions = monitorPartitions(admin);
       try {
         await()
             .pollDelay(Duration.ZERO)
@@ -460,27 +448,15 @@ public final class FaultStack implements AutoCloseable {
             .atMost(timeout)
             .until(
                 () -> {
-                  Map<TopicPartition, OffsetAndMetadata> committed =
-                      admin
-                          .listConsumerGroupOffsets("tally-monitor")
-                          .partitionsToOffsetAndMetadata()
-                          .get();
-                  Map<TopicPartition, Long> latest =
-                      admin.listOffsets(offsetsRequest).all().get().entrySet().stream()
-                          .collect(
-                              Collectors.toMap(
-                                  Map.Entry::getKey, entry -> entry.getValue().offset()));
                   Map<TopicPartition, String> remaining = new LinkedHashMap<>();
-                  for (TopicPartition partition : partitions) {
-                    OffsetAndMetadata offset = committed.get(partition);
-                    long end = latest.get(partition);
-                    if (offset == null || offset.offset() != end) {
+                  for (MonitorOffset offset : monitorOffsets(admin, partitions)) {
+                    if (offset.committed() == null || offset.committed() != offset.end()) {
                       remaining.put(
-                          partition,
+                          offset.partition(),
                           "committed="
-                              + (offset == null ? "none" : offset.offset())
+                              + (offset.committed() == null ? "none" : offset.committed())
                               + ", end="
-                              + end);
+                              + offset.end());
                     }
                   }
                   lagging.set(Map.copyOf(remaining));
@@ -495,6 +471,77 @@ public final class FaultStack implements AutoCloseable {
       throw new IllegalStateException("interrupted waiting for monitor consumer group", e);
     } catch (ExecutionException e) {
       throw new IllegalStateException("failed to read monitor consumer offsets", e.getCause());
+    }
+  }
+
+  public String monitorConsumerLag() {
+    try (AdminClient admin = adminClient()) {
+      List<MonitorOffset> offsets = monitorOffsets(admin, monitorPartitions(admin));
+      return offsets.stream()
+          .map(
+              offset ->
+                  MONITOR_TOPIC
+                      + "-"
+                      + offset.partition().partition()
+                      + " committed="
+                      + (offset.committed() == null ? "none" : offset.committed())
+                      + " end="
+                      + offset.end())
+          .collect(Collectors.joining(System.lineSeparator()));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted waiting for monitor consumer group", e);
+    } catch (ExecutionException e) {
+      throw new IllegalStateException("failed to read monitor consumer offsets", e.getCause());
+    }
+  }
+
+  private static List<TopicPartition> monitorPartitions(AdminClient admin)
+      throws InterruptedException, ExecutionException {
+    return admin
+        .describeTopics(List.of(MONITOR_TOPIC))
+        .allTopicNames()
+        .get()
+        .get(MONITOR_TOPIC)
+        .partitions()
+        .stream()
+        .map(partition -> new TopicPartition(MONITOR_TOPIC, partition.partition()))
+        .toList();
+  }
+
+  private static List<MonitorOffset> monitorOffsets(
+      AdminClient admin, List<TopicPartition> partitions)
+      throws InterruptedException, ExecutionException {
+    Map<TopicPartition, OffsetAndMetadata> committed =
+        admin.listConsumerGroupOffsets("tally-monitor").partitionsToOffsetAndMetadata().get();
+    Map<TopicPartition, OffsetSpec> offsetsRequest =
+        partitions.stream()
+            .collect(Collectors.toMap(partition -> partition, partition -> OffsetSpec.latest()));
+    Map<TopicPartition, Long> latest =
+        admin.listOffsets(offsetsRequest).all().get().entrySet().stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().offset()));
+    return partitions.stream()
+        .map(
+            partition -> {
+              OffsetAndMetadata offset = committed.get(partition);
+              return new MonitorOffset(
+                  partition, offset == null ? null : offset.offset(), latest.get(partition));
+            })
+        .toList();
+  }
+
+  private record MonitorOffset(TopicPartition partition, Long committed, long end) {}
+
+  public String monitorLogTail(int lines) {
+    try {
+      if (!running("monitor")) {
+        return "monitor container is not running";
+      }
+      List<String> logLines = container(Part.MONITOR).getLogs().lines().toList();
+      int start = Math.max(0, logLines.size() - Math.max(0, lines));
+      return String.join(System.lineSeparator(), logLines.subList(start, logLines.size()));
+    } catch (RuntimeException e) {
+      return "monitor logs unavailable";
     }
   }
 

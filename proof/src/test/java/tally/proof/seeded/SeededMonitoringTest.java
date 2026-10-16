@@ -24,6 +24,7 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import tally.proof.fault.FaultStack;
@@ -175,14 +176,45 @@ public class SeededMonitoringTest {
 
   private static void awaitProcessedEvents(FaultStack stack, int expected) {
     try (Connection connection = stack.monitorJdbc()) {
-      await()
-          .pollDelay(Duration.ZERO)
-          .pollInterval(Duration.ofMillis(500))
-          .atMost(Duration.ofSeconds(120))
-          .until(() -> processedEventCount(connection) == expected);
+      try {
+        await()
+            .pollDelay(Duration.ZERO)
+            .pollInterval(Duration.ofMillis(500))
+            .atMost(Duration.ofSeconds(120))
+            .until(() -> processedEventCount(connection) == expected);
+      } catch (ConditionTimeoutException e) {
+        String processed;
+        try {
+          processed = Long.toString(processedEventCount(connection));
+        } catch (SQLException queryFailure) {
+          processed = "unavailable";
+        }
+        throw new AssertionError(
+            "processed event wait timed out: expected="
+                + expected
+                + ", processed="
+                + processed
+                + monitorDiagnostics(stack),
+            e);
+      }
     } catch (SQLException e) {
       throw new IllegalStateException("failed to query processed events", e);
     }
+  }
+
+  private static String monitorDiagnostics(FaultStack stack) {
+    String lag;
+    try {
+      lag = stack.monitorConsumerLag();
+    } catch (RuntimeException e) {
+      lag = "unavailable: " + e.getMessage();
+    }
+    return ", consumer_lag="
+        + lag
+        + System.lineSeparator()
+        + "monitor_log_tail:"
+        + System.lineSeparator()
+        + stack.monitorLogTail(200);
   }
 
   private static long processedEventCount(Connection connection) throws SQLException {
