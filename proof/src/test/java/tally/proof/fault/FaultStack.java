@@ -36,8 +36,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.errors.GroupIdNotFoundException;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.awaitility.core.ConditionTimeoutException;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.Testcontainers;
@@ -61,11 +67,14 @@ import tools.jackson.databind.json.JsonMapper;
 /** Containers and stable addresses for exercising ledger failures. */
 public final class FaultStack implements AutoCloseable {
 
+  public static final String MONITOR_TOPIC = "tally.monitor-seeded.v1";
+
   public enum Part {
     POSTGRES,
     TOXIPROXY,
     LEDGER,
     KAFKA,
+    MONITOR,
     EXTBANK,
     WORKER,
     WORKER2
@@ -73,6 +82,7 @@ public final class FaultStack implements AutoCloseable {
 
   private static final String PASSWORD = "test-password";
   private static final String LEDGER_IMAGE = "tally/ledger:dev";
+  private static final String MONITOR_IMAGE = "tally/monitor:dev";
   private static final String EXTBANK_IMAGE = "tally/extbank:dev";
   private static final String KAFKA_IMAGE = "apache/kafka:4.2.2";
   private static final String API_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -81,6 +91,7 @@ public final class FaultStack implements AutoCloseable {
   private static final long TOXIPROXY_MEMORY_MB = 128;
   private static final long LEDGER_MEMORY_MB = 1024;
   private static final long KAFKA_MEMORY_MB = 1024;
+  private static final long MONITOR_MEMORY_MB = 512;
   private static final long EXTBANK_MEMORY_MB = 384;
   private static final long WORKER_MEMORY_MB = 768;
   private static final long K6_MEMORY_MB = 512;
@@ -158,6 +169,21 @@ public final class FaultStack implements AutoCloseable {
                 "TALLY_DB_PASSWORD", PASSWORD,
                 "JAVA_TOOL_OPTIONS", "-Xmx192m",
                 "EXTBANK_API_KEY", API_KEY)));
+    env.put(
+        Part.MONITOR,
+        new HashMap<>(
+            Map.ofEntries(
+                Map.entry("SERVER_PORT", "8082"),
+                Map.entry("TALLY_DB_URL", "jdbc:postgresql://postgres:5432/tally"),
+                Map.entry("TALLY_DB_USER", "monitor_app"),
+                Map.entry("TALLY_DB_PASSWORD", PASSWORD),
+                Map.entry("TALLY_KAFKA_BOOTSTRAP", "kafka:9092"),
+                Map.entry("TALLY_KAFKA_TOPIC", MONITOR_TOPIC),
+                Map.entry(
+                    "TALLY_AUTH_JWKS_URI",
+                    issuer.jwksUri().replace("localhost", "host.testcontainers.internal")),
+                Map.entry("TALLY_AUTH_ISSUER", issuer.issuer()),
+                Map.entry("JAVA_TOOL_OPTIONS", "-Xmx288m"))));
     for (Part worker : List.of(Part.WORKER, Part.WORKER2)) {
       env.put(
           worker,
@@ -212,13 +238,16 @@ public final class FaultStack implements AutoCloseable {
     if (requested.contains(Part.EXTBANK)) {
       requireImage(dockerClient, EXTBANK_IMAGE);
     }
+    if (requested.contains(Part.MONITOR)) {
+      requireImage(dockerClient, MONITOR_IMAGE);
+    }
     FaultStack stack = new FaultStack(strategy, dockerClient);
     try {
+      if (requested.contains(Part.LEDGER) || requested.contains(Part.MONITOR)) {
+        Testcontainers.exposeHostPorts(URI.create(stack.issuer.jwksUri()).getPort());
+      }
       for (Part part : Part.values()) {
         if (requested.contains(part)) {
-          if (part == Part.LEDGER) {
-            Testcontainers.exposeHostPorts(URI.create(stack.issuer.jwksUri()).getPort());
-          }
           stack.releaseReservation(part);
           try {
             GenericContainer<?> container = stack.createContainer(part);
@@ -383,6 +412,44 @@ public final class FaultStack implements AutoCloseable {
     return DriverManager.getConnection(jdbcUrl(), "postgres", PASSWORD);
   }
 
+  public Connection monitorJdbc() throws SQLException {
+    return DriverManager.getConnection(jdbcUrl(), "monitor_app", PASSWORD);
+  }
+
+  public void createTopic() {
+    container(Part.KAFKA);
+    try (AdminClient admin = adminClient()) {
+      try {
+        admin.createTopics(List.of(new NewTopic(MONITOR_TOPIC, 3, (short) 1))).all().get();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("interrupted creating monitor topic", e);
+      } catch (ExecutionException e) {
+        if (!(e.getCause() instanceof TopicExistsException)) {
+          throw new IllegalStateException("failed to create monitor topic", e.getCause());
+        }
+      }
+    }
+  }
+
+  public void resetMonitor() {
+    GenericContainer<?> monitor = container(Part.MONITOR);
+    if (running("monitor")) {
+      dockerClient.stopContainerCmd(monitor.getContainerId()).withTimeout(10).exec();
+      awaitExit("monitor", READY_TIMEOUT);
+    }
+    try (Connection connection = superuserJdbc();
+        Statement statement = connection.createStatement()) {
+      statement.execute("DROP SCHEMA monitor CASCADE");
+      statement.execute("CREATE SCHEMA monitor AUTHORIZATION monitor_app");
+      statement.execute("ALTER ROLE monitor_app SET search_path = monitor");
+    } catch (SQLException e) {
+      throw new IllegalStateException("failed to reset monitor schema", e);
+    }
+    deleteMonitorGroup();
+    start("monitor");
+  }
+
   public List<Violation> checker() throws SQLException {
     return checker(containers.containsKey(Part.KAFKA), false);
   }
@@ -530,6 +597,8 @@ public final class FaultStack implements AutoCloseable {
                         httpReady("http://localhost:" + ports.get(Part.TOXIPROXY) + "/version");
                     case LEDGER -> httpReady(ledgerUrl() + "/ready");
                     case KAFKA -> true;
+                    case MONITOR ->
+                        httpReady("http://localhost:" + ports.get(Part.MONITOR) + "/ready");
                     case EXTBANK -> httpReady(extbankUrl() + "/ready");
                     case WORKER, WORKER2 -> httpReady(workerUrl(part) + "/health");
                   });
@@ -640,6 +709,11 @@ public final class FaultStack implements AutoCloseable {
                   .waitingFor(
                       Wait.forLogMessage(".*Kafka Server started.*", 1)
                           .withStartupTimeout(READY_TIMEOUT));
+          case MONITOR ->
+              new GenericContainer<>(MONITOR_IMAGE)
+                  .withExposedPorts(8082)
+                  .waitingFor(
+                      Wait.forHttp("/ready").forStatusCode(200).withStartupTimeout(READY_TIMEOUT));
           case EXTBANK ->
               new GenericContainer<>(EXTBANK_IMAGE)
                   .withExposedPorts(8083)
@@ -665,6 +739,7 @@ public final class FaultStack implements AutoCloseable {
           case TOXIPROXY -> 8474;
           case LEDGER -> 8080;
           case KAFKA -> 29092;
+          case MONITOR -> 8082;
           case EXTBANK -> 8083;
           case WORKER, WORKER2 -> 8084;
         };
@@ -674,6 +749,7 @@ public final class FaultStack implements AutoCloseable {
           case TOXIPROXY -> TOXIPROXY_MEMORY_MB;
           case LEDGER -> LEDGER_MEMORY_MB;
           case KAFKA -> KAFKA_MEMORY_MB;
+          case MONITOR -> MONITOR_MEMORY_MB;
           case EXTBANK -> EXTBANK_MEMORY_MB;
           case WORKER, WORKER2 -> WORKER_MEMORY_MB;
         };
@@ -733,6 +809,25 @@ public final class FaultStack implements AutoCloseable {
     return "jdbc:postgresql://localhost:" + ports.get(Part.POSTGRES) + "/tally";
   }
 
+  private AdminClient adminClient() {
+    return AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBootstrap()));
+  }
+
+  private void deleteMonitorGroup() {
+    try (AdminClient admin = adminClient()) {
+      try {
+        admin.deleteConsumerGroups(List.of("tally-monitor")).all().get();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("interrupted deleting monitor consumer group", e);
+      } catch (ExecutionException e) {
+        if (!(e.getCause() instanceof GroupIdNotFoundException)) {
+          throw new IllegalStateException("failed to delete monitor consumer group", e.getCause());
+        }
+      }
+    }
+  }
+
   private GenericContainer<?> container(Part part) {
     GenericContainer<?> container = containers.get(part);
     if (container == null) {
@@ -747,6 +842,7 @@ public final class FaultStack implements AutoCloseable {
       case "toxiproxy" -> Part.TOXIPROXY;
       case "ledger" -> Part.LEDGER;
       case "kafka" -> Part.KAFKA;
+      case "monitor" -> Part.MONITOR;
       case "extbank" -> Part.EXTBANK;
       case "worker" -> Part.WORKER;
       case "worker2" -> Part.WORKER2;
