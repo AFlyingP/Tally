@@ -114,6 +114,7 @@ public class SeededMonitoringTest {
       stack.resetMonitor();
       publish(stack, traffic.events(), 2);
       awaitProcessedEvents(stack, traffic.events().size());
+      stack.awaitMonitorCaughtUp(Duration.ofSeconds(120));
       Set<AlertKey> foundTwice = readAlerts(stack);
 
       List<Map<String, Object>> rules = new ArrayList<>();

@@ -37,11 +37,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.admin.OffsetSpec;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.GroupIdNotFoundException;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.awaitility.core.ConditionTimeoutException;
@@ -429,6 +434,67 @@ public final class FaultStack implements AutoCloseable {
           throw new IllegalStateException("failed to create monitor topic", e.getCause());
         }
       }
+    }
+  }
+
+  public void awaitMonitorCaughtUp(Duration timeout) {
+    AtomicReference<Map<TopicPartition, String>> lagging = new AtomicReference<>(Map.of());
+    try (AdminClient admin = adminClient()) {
+      List<TopicPartition> partitions =
+          admin
+              .describeTopics(List.of(MONITOR_TOPIC))
+              .allTopicNames()
+              .get()
+              .get(MONITOR_TOPIC)
+              .partitions()
+              .stream()
+              .map(partition -> new TopicPartition(MONITOR_TOPIC, partition.partition()))
+              .toList();
+      Map<TopicPartition, OffsetSpec> offsetsRequest =
+          partitions.stream()
+              .collect(Collectors.toMap(partition -> partition, p -> OffsetSpec.latest()));
+      try {
+        await()
+            .pollDelay(Duration.ZERO)
+            .pollInterval(Duration.ofMillis(100))
+            .atMost(timeout)
+            .until(
+                () -> {
+                  Map<TopicPartition, OffsetAndMetadata> committed =
+                      admin
+                          .listConsumerGroupOffsets("tally-monitor")
+                          .partitionsToOffsetAndMetadata()
+                          .get();
+                  Map<TopicPartition, Long> latest =
+                      admin.listOffsets(offsetsRequest).all().get().entrySet().stream()
+                          .collect(
+                              Collectors.toMap(
+                                  Map.Entry::getKey, entry -> entry.getValue().offset()));
+                  Map<TopicPartition, String> remaining = new LinkedHashMap<>();
+                  for (TopicPartition partition : partitions) {
+                    OffsetAndMetadata offset = committed.get(partition);
+                    long end = latest.get(partition);
+                    if (offset == null || offset.offset() != end) {
+                      remaining.put(
+                          partition,
+                          "committed="
+                              + (offset == null ? "none" : offset.offset())
+                              + ", end="
+                              + end);
+                    }
+                  }
+                  lagging.set(Map.copyOf(remaining));
+                  return remaining.isEmpty();
+                });
+      } catch (ConditionTimeoutException e) {
+        throw new IllegalStateException(
+            "monitor consumer group has lagging partitions: " + lagging.get(), e);
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted waiting for monitor consumer group", e);
+    } catch (ExecutionException e) {
+      throw new IllegalStateException("failed to read monitor consumer offsets", e.getCause());
     }
   }
 
