@@ -141,12 +141,16 @@ class EventConsumerIT extends MonitorIT {
     awaitProcessed(List.of(event));
     long movementsBefore = movementCount(source);
     long alertsBefore = alertCount(source);
+    List<MovementRow> originalMovements = movements(event.transactionId());
+    Instant laterAt = BASE.plusSeconds(1);
+    Published later = transfer(source, UUID.randomUUID(), laterAt);
 
-    publish(event);
-    awaitProcessed(List.of(event));
+    publish(event, later);
+    awaitProcessed(List.of(event, later));
 
     assertThat(processedCount(List.of(event))).isEqualTo(1);
-    assertThat(movementCount(source)).isEqualTo(movementsBefore);
+    assertThat(movements(event.transactionId())).isEqualTo(originalMovements);
+    assertThat(movementCount(source)).isEqualTo(movementsBefore + 1);
     assertThat(alertCount(source)).isEqualTo(alertsBefore);
   }
 
