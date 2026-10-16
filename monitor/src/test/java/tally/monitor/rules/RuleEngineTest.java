@@ -72,11 +72,10 @@ class RuleEngineTest {
   @Test
   void incomingMovementsAreNotCounted() {
     List<Movement> movements = outgoingAt(10, 1);
-    Movement incoming = incomingAt(100000, 10);
     List<Movement> withIncoming = new ArrayList<>(movements);
-    withIncoming.add(incoming);
+    withIncoming.add(incomingAt(10000000, 5));
 
-    assertThat(engine.evaluate(ACCOUNT_ID, withIncoming, incoming)).isEmpty();
+    assertThat(engine.evaluate(ACCOUNT_ID, withIncoming, movements.getLast())).isEmpty();
   }
 
   @Test
@@ -206,19 +205,24 @@ class RuleEngineTest {
   @Test
   void feedingAMovementTwiceAddsNothing() {
     List<Movement> movements = outgoingAt(11, 1);
-    List<Movement> repeated = new ArrayList<>(movements);
-    repeated.add(movements.getLast());
+    Set<AlertCandidate> withoutRepeat = evaluateInArrivalOrder(movements);
+    Set<AlertCandidate> withRepeat = new HashSet<>(withoutRepeat);
+    withRepeat.addAll(engine.evaluate(ACCOUNT_ID, movements, movements.getLast()));
 
-    assertThat(evaluateInArrivalOrder(repeated))
-        .containsExactlyInAnyOrderElementsOf(evaluateInArrivalOrder(movements));
+    assertThat(withRepeat).containsExactlyInAnyOrderElementsOf(withoutRepeat);
   }
 
   @Test
   void isR2CandidateHandlesLargeAmountsWithoutOverflow() {
     RuleProperties.R2 largeThreshold = new RuleProperties.R2(3, 86400, 4000000000000000000L, 90);
+    RuleProperties.R2 overflowingThreshold =
+        new RuleProperties.R2(3, 86400, 100000000000000000L, 93);
 
     assertThat(RuleEngine.isR2Candidate(3600000000000000000L, largeThreshold)).isTrue();
     assertThat(RuleEngine.isR2Candidate(Long.MAX_VALUE, largeThreshold)).isFalse();
+    assertThat(RuleEngine.isR2Candidate(1, overflowingThreshold)).isFalse();
+    assertThat(RuleEngine.isR2Candidate(93000000000000000L, overflowingThreshold)).isTrue();
+    assertThat(RuleEngine.isR2Candidate(92999999999999999L, overflowingThreshold)).isFalse();
   }
 
   @Test

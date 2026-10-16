@@ -57,15 +57,20 @@ public class RuleEngine {
     }
 
     long amountProductHigh = Math.multiplyHigh(amount, 100L);
+    long amountProductLow = amount * 100L;
     long thresholdProductHigh = Math.multiplyHigh(threshold, (long) r2.lowerPercent());
-    if (amountProductHigh != 0 || thresholdProductHigh != 0) {
+    long thresholdProductLow = threshold * (long) r2.lowerPercent();
+    if (amountProductHigh != 0
+        || amountProductLow < 0
+        || thresholdProductHigh != 0
+        || thresholdProductLow < 0) {
       return BigInteger.valueOf(amount)
               .multiply(HUNDRED)
               .compareTo(
                   BigInteger.valueOf(threshold).multiply(BigInteger.valueOf(r2.lowerPercent())))
           >= 0;
     }
-    return amount * 100 >= threshold * r2.lowerPercent();
+    return amountProductLow >= thresholdProductLow;
   }
 
   private void addVelocityCandidates(
