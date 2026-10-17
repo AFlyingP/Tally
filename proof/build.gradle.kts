@@ -15,7 +15,7 @@ dependencies {
     testImplementation(libs.testcontainers.kafka)
     testImplementation(libs.testcontainers.toxiproxy)
     testRuntimeOnly(libs.postgresql)
-    testRuntimeOnly(libs.junit.launcher)
+    testImplementation(libs.junit.launcher)
 }
 
 tasks.processTestResources {
