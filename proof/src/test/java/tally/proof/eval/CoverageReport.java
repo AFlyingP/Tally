@@ -29,7 +29,9 @@ public final class CoverageReport {
     int total = 0;
     for (int index = 0; index < mutations.getLength(); index++) {
       Element mutation = (Element) mutations.item(index);
-      if (!mutation.getAttribute("mutatedClass").startsWith("tally.ledger.core.")) {
+      NodeList mutatedClasses = mutation.getElementsByTagName("mutatedClass");
+      if (mutatedClasses.getLength() == 0
+          || !mutatedClasses.item(0).getTextContent().startsWith("tally.ledger.core.")) {
         continue;
       }
       String status = mutation.getAttribute("status");
@@ -48,12 +50,15 @@ public final class CoverageReport {
         survived++;
       }
     }
+    if (total == 0) {
+      throw new IllegalStateException("no mutants of tally.ledger.core in " + mutationsXml);
+    }
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("mutants", total);
     result.put("killed", killed);
     result.put("survived", survived);
     result.put("no_coverage", noCoverage);
-    result.put("score", total == 0 ? 0.0 : Math.round(killed * 10_000.0 / total) / 10_000.0);
+    result.put("score", Math.round(killed * 10_000.0 / total) / 10_000.0);
     return Map.of("mutation", result);
   }
 

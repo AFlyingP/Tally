@@ -1,6 +1,7 @@
 package tally.proof.eval;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -40,6 +41,22 @@ class CoverageReportTest {
   }
 
   @Test
+  void mutationFailsWhenThereAreNoViableMutantsInLedgerCore(@TempDir Path directory)
+      throws Exception {
+    Path mutations = directory.resolve("mutations.xml");
+    Files.writeString(
+        mutations,
+        "<mutations>"
+            + mutation("tally.ledger.core.Account", "NON_VIABLE")
+            + mutation("tally.ledger.other.Account", "KILLED")
+            + "</mutations>");
+
+    assertThatThrownBy(() -> CoverageReport.mutation(mutations))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("no mutants of tally.ledger.core in " + mutations);
+  }
+
+  @Test
   void testsCountOnlyTestAndIntegrationResultsAndSubtractSkipped(@TempDir Path directory)
       throws Exception {
     writeSuite(directory.resolve("ledger/build/test-results/test/TEST-unit.xml"), 8, 2);
@@ -52,7 +69,11 @@ class CoverageReportTest {
   }
 
   private static String mutation(String mutatedClass, String status) {
-    return "<mutation mutatedClass=\"" + mutatedClass + "\" status=\"" + status + "\"/>";
+    return "<mutation status=\""
+        + status
+        + "\"><mutatedClass>"
+        + mutatedClass
+        + "</mutatedClass></mutation>";
   }
 
   private static void writeSuite(Path path, int tests, int skipped) throws Exception {
