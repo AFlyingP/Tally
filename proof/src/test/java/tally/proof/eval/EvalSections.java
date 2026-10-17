@@ -66,28 +66,22 @@ public final class EvalSections {
   public static Map<String, Object> concurrency(Sizes sizes, long seed) {
     Map<String, Object> strategies = new LinkedHashMap<>();
     for (String strategy : STRATEGIES) {
-      InProcessLedger ledger = InProcessLedger.start(strategy, Clock.systemUTC());
-      try {
-        ConcurrencyRun.Result uniform =
-            ConcurrencyRun.run(
-                ledger,
-                Workload.UNIFORM,
-                sizes.concurrencyOperations() / 2,
-                sizes.concurrencyThreads(),
-                seed);
-        ConcurrencyRun.Result hot =
-            ConcurrencyRun.run(
-                ledger,
-                Workload.HOT,
-                sizes.concurrencyOperations() / 2,
-                sizes.concurrencyThreads(),
-                seed);
-        strategies.put(strategy, concurrencyResult(uniform, hot));
-      } finally {
-        ledger.stop();
-      }
+      ConcurrencyRun.Result uniform = runConcurrency(strategy, Workload.UNIFORM, sizes, seed);
+      ConcurrencyRun.Result hot = runConcurrency(strategy, Workload.HOT, sizes, seed);
+      strategies.put(strategy, concurrencyResult(uniform, hot));
     }
     return Map.of("concurrency", strategies);
+  }
+
+  private static ConcurrencyRun.Result runConcurrency(
+      String strategy, Workload workload, Sizes sizes, long seed) {
+    InProcessLedger ledger = InProcessLedger.start(strategy, Clock.systemUTC());
+    try {
+      return ConcurrencyRun.run(
+          ledger, workload, sizes.concurrencyOperations() / 2, sizes.concurrencyThreads(), seed);
+    } finally {
+      ledger.stop();
+    }
   }
 
   public static Map<String, Object> baseline(long seed) {
@@ -96,8 +90,8 @@ public final class EvalSections {
       ConcurrencyRun.Result result =
           ConcurrencyRun.run(ledger, Workload.HOT, 20_000, 32, seed, true);
       Map<String, Object> values = new LinkedHashMap<>();
-      values.put("operations", result.operations());
-      values.put("violations", result.violations().size());
+      values.put("operations", executedOperations(result));
+      values.put("violations", violationCount(result));
       values.put("double_posted_pairs", result.doublePostedPairs());
       return Map.of("baseline", Map.of("naive", values));
     } finally {
@@ -649,15 +643,26 @@ public final class EvalSections {
   private static Map<String, Object> concurrencyResult(
       ConcurrencyRun.Result first, ConcurrencyRun.Result second) {
     Map<String, Object> values = new LinkedHashMap<>();
-    values.put("operations", first.operations() + second.operations());
+    values.put("operations", executedOperations(first) + executedOperations(second));
     values.put("posted", first.posted() + second.posted());
     values.put("insufficient", first.insufficient() + second.insufficient());
     values.put("exhausted", first.exhausted() + second.exhausted());
-    values.put("violations", first.violations().size() + second.violations().size());
+    values.put("violations", violationCount(first) + violationCount(second));
     values.put("pairs", first.pairs() + second.pairs());
     values.put("double_posted_pairs", first.doublePostedPairs() + second.doublePostedPairs());
     values.put("seconds", first.seconds() + second.seconds());
     return values;
+  }
+
+  private static long executedOperations(ConcurrencyRun.Result result) {
+    return result.posted() + result.insufficient() + result.exhausted() + result.unexpected();
+  }
+
+  private static long violationCount(ConcurrencyRun.Result result) {
+    return result.violations().size()
+        + (result.posted() != result.transferRows() ? 1 : 0)
+        + (result.balanceSum() != result.depositedSum() ? 1 : 0)
+        + result.unexpected();
   }
 
   private static Map<String, Object> faultStrategy(
