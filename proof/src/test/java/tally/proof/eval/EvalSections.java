@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SplittableRandom;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -559,10 +560,20 @@ public final class EvalSections {
     }
 
     private void awaitPayments() {
-      long end = System.nanoTime() + Duration.ofSeconds(300).toNanos();
+      long started = System.nanoTime();
+      long end = started + Duration.ofSeconds(300).toNanos();
+      long nextProgress = 0;
       while (System.nanoTime() < end) {
-        if (terminalCount() == PAYMENT_COUNT) {
+        int terminal = terminalCount();
+        if (terminal == PAYMENT_COUNT) {
           return;
+        }
+        long elapsed = System.nanoTime() - started;
+        if (elapsed >= nextProgress) {
+          System.out.printf(
+              "payments wait %ds terminal=%d states=%s%n",
+              TimeUnit.NANOSECONDS.toSeconds(elapsed), terminal, new TreeMap<>(states()));
+          nextProgress += Duration.ofSeconds(30).toNanos();
         }
         try {
           TimeUnit.MILLISECONDS.sleep(100);
@@ -571,7 +582,51 @@ public final class EvalSections {
           throw new IllegalStateException("payment wait interrupted", e);
         }
       }
-      throw new IllegalStateException("payments did not become terminal within 300 seconds");
+      throw new IllegalStateException(
+          "payments did not become terminal within 300 seconds; " + paymentTimeoutDetails());
+    }
+
+    private String paymentTimeoutDetails() {
+      Map<String, Integer> stateCounts = new TreeMap<>(states());
+      List<String> pending = new ArrayList<>();
+      String databaseTime;
+      try (Connection connection = stack.jdbc();
+          PreparedStatement timeQuery = connection.prepareStatement("SELECT now()")) {
+        try (ResultSet rows = timeQuery.executeQuery()) {
+          rows.next();
+          databaseTime = rows.getObject(1).toString();
+        }
+        try (PreparedStatement paymentQuery =
+                connection.prepareStatement(
+                    "SELECT id, state, status_attempts, next_attempt_at, lease_owner, lease_until "
+                        + "FROM ledger.external_payment "
+                        + "WHERE state NOT IN "
+                        + "('SETTLED','REJECTED_COMPENSATED','MANUAL_REVIEW','FAILED') "
+                        + "ORDER BY next_attempt_at, id LIMIT 10");
+            ResultSet rows = paymentQuery.executeQuery()) {
+          while (rows.next()) {
+            pending.add(
+                String.format(
+                    "%s %s %s %s %s %s",
+                    rows.getObject(1),
+                    rows.getObject(2),
+                    rows.getObject(3),
+                    rows.getObject(4),
+                    rows.getObject(5),
+                    rows.getObject(6)));
+          }
+        }
+      } catch (SQLException e) {
+        throw new IllegalStateException("failed to read payment timeout details", e);
+      }
+      return "db_now="
+          + databaseTime
+          + "; states="
+          + stateCounts
+          + "; non_terminal="
+          + pending
+          + "; worker_log_tail:\n"
+          + stack.logTail("worker", 80);
     }
 
     private int terminalCount() {
