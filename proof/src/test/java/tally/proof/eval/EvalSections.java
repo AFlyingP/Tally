@@ -21,8 +21,10 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SplittableRandom;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -33,9 +35,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
+import org.junit.platform.engine.reporting.ReportEntry;
 import org.junit.platform.launcher.Launcher;
 import org.junit.platform.launcher.LauncherDiscoveryRequest;
+import org.junit.platform.launcher.TestExecutionListener;
+import org.junit.platform.launcher.TestIdentifier;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
 import org.junit.platform.launcher.listeners.SummaryGeneratingListener;
@@ -58,6 +65,7 @@ import tools.jackson.databind.json.JsonMapper;
 public final class EvalSections {
 
   private static final JsonMapper JSON = JsonMapper.builder().build();
+  private static final Pattern TRIES_LINE = Pattern.compile("(?m)^\\s*tries\\s*=\\s*(\\d+)");
   private static final List<String> STRATEGIES =
       List.of("pessimistic", "optimistic", "serializable");
 
@@ -104,9 +112,9 @@ public final class EvalSections {
     for (String strategy : STRATEGIES) {
       String previousStrategy = System.getProperty("proof.strategy");
       System.setProperty("proof.strategy", strategy);
-      long failures;
+      PropertyResult result;
       try {
-        failures = runProperties(strategy);
+        result = runProperties(strategy);
       } finally {
         if (previousStrategy == null) {
           System.clearProperty("proof.strategy");
@@ -115,9 +123,9 @@ public final class EvalSections {
         }
       }
       Map<String, Object> values = new LinkedHashMap<>();
-      values.put("tries", 500);
+      values.put("tries", result.tries());
       values.put("sequence_length", sizes.sequenceLength());
-      values.put("failures", failures);
+      values.put("failures", result.failures());
       strategies.put(strategy, values);
     }
     return Map.of("property", strategies);
@@ -755,7 +763,7 @@ public final class EvalSections {
     }
   }
 
-  private static long runProperties(String strategy) {
+  private static PropertyResult runProperties(String strategy) {
     LauncherDiscoveryRequest request =
         LauncherDiscoveryRequestBuilder.request()
             .selectors(
@@ -766,8 +774,42 @@ public final class EvalSections {
             .build();
     Launcher launcher = LauncherFactory.create();
     SummaryGeneratingListener listener = new SummaryGeneratingListener();
+    List<Integer> tries = new ArrayList<>();
+    Set<String> reportKeys = new LinkedHashSet<>();
     launcher.registerTestExecutionListeners(listener);
+    launcher.registerTestExecutionListeners(
+        new TestExecutionListener() {
+          @Override
+          public void reportingEntryPublished(TestIdentifier testIdentifier, ReportEntry entry) {
+            for (Map.Entry<String, String> report : entry.getKeyValuePairs().entrySet()) {
+              reportKeys.add(report.getKey());
+              String value = report.getValue();
+              if (report.getKey().equals("tries")) {
+                tries.add(Integer.parseInt(value));
+              }
+              Matcher matcher = TRIES_LINE.matcher(value);
+              while (matcher.find()) {
+                tries.add(Integer.parseInt(matcher.group(1)));
+              }
+            }
+          }
+        });
     launcher.execute(request);
-    return listener.getSummary().getTestsFailedCount();
+    var summary = listener.getSummary();
+    if (summary.getTestsFoundCount() == 0) {
+      throw new IllegalStateException("no jqwik tests ran for " + strategy);
+    }
+    if (tries.isEmpty()) {
+      throw new IllegalStateException(
+          "no jqwik tries reported for " + strategy + "; report entry keys: " + reportKeys);
+    }
+    long failures =
+        summary.getTestsFailedCount()
+            + summary.getTestsAbortedCount()
+            + summary.getContainersFailedCount();
+    return new PropertyResult(
+        tries.stream().mapToInt(Integer::intValue).min().orElseThrow(), failures);
   }
+
+  private record PropertyResult(int tries, long failures) {}
 }

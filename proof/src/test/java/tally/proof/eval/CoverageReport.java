@@ -26,10 +26,21 @@ public final class CoverageReport {
     int killed = 0;
     int survived = 0;
     int noCoverage = 0;
-    int total = mutations.getLength();
-    for (int index = 0; index < total; index++) {
-      String status = ((Element) mutations.item(index)).getAttribute("status");
-      if (status.equals("KILLED") || status.equals("TIMED_OUT")) {
+    int total = 0;
+    for (int index = 0; index < mutations.getLength(); index++) {
+      Element mutation = (Element) mutations.item(index);
+      if (!mutation.getAttribute("mutatedClass").startsWith("tally.ledger.core.")) {
+        continue;
+      }
+      String status = mutation.getAttribute("status");
+      if (status.equals("NON_VIABLE")) {
+        continue;
+      }
+      total++;
+      if (status.equals("KILLED")
+          || status.equals("TIMED_OUT")
+          || status.equals("MEMORY_ERROR")
+          || status.equals("RUN_ERROR")) {
         killed++;
       } else if (status.equals("NO_COVERAGE")) {
         noCoverage++;
@@ -54,12 +65,14 @@ public final class CoverageReport {
           files
               .filter(
                   path ->
-                      hasTestResultsPath(path)
+                      hasTestResultsPath(root, path)
                           && path.getFileName().toString().startsWith("TEST-")
                           && path.getFileName().toString().endsWith(".xml"))
               .toList()) {
         Element suite = document(file).getDocumentElement();
         int tests = Integer.parseInt(suite.getAttribute("tests"));
+        int skipped = Integer.parseInt(suite.getAttribute("skipped"));
+        tests -= skipped;
         String module = module(root, file);
         byModule.merge(module, tests, (first, second) -> (Integer) first + (Integer) second);
         count += tests;
@@ -123,15 +136,15 @@ public final class CoverageReport {
     }
   }
 
-  private static boolean hasTestResultsPath(Path path) {
-    Path previous = null;
-    for (Path part : path) {
-      if (previous != null
-          && previous.toString().equals("build")
-          && part.toString().equals("test-results")) {
+  private static boolean hasTestResultsPath(Path root, Path path) {
+    Path relative = root.relativize(path);
+    for (int index = 0; index + 3 < relative.getNameCount(); index++) {
+      if (relative.getName(index + 1).toString().equals("build")
+          && relative.getName(index + 2).toString().equals("test-results")
+          && (relative.getName(index + 3).toString().equals("test")
+              || relative.getName(index + 3).toString().equals("integrationTest"))) {
         return true;
       }
-      previous = part;
     }
     return false;
   }
