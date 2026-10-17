@@ -555,15 +555,19 @@ public final class FaultStack implements AutoCloseable {
   private record MonitorOffset(TopicPartition partition, Long committed, long end) {}
 
   public String monitorLogTail(int lines) {
+    if (!running("monitor")) {
+      return "monitor container is not running";
+    }
+    return logTail("monitor", lines);
+  }
+
+  public String logTail(String alias, int lines) {
     try {
-      if (!running("monitor")) {
-        return "monitor container is not running";
-      }
-      List<String> logLines = container(Part.MONITOR).getLogs().lines().toList();
+      List<String> logLines = container(part(alias)).getLogs().lines().toList();
       int start = Math.max(0, logLines.size() - Math.max(0, lines));
       return String.join(System.lineSeparator(), logLines.subList(start, logLines.size()));
     } catch (RuntimeException e) {
-      return "monitor logs unavailable";
+      return alias + " logs unavailable";
     }
   }
 

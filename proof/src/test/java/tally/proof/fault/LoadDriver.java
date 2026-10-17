@@ -47,6 +47,7 @@ public final class LoadDriver {
   private final Duration duration;
   private final Duration clientTimeout;
   private final long seed;
+  private final FaultStack stack;
   private final String baseUrl;
   private final String token;
   private final HttpClient http;
@@ -72,6 +73,7 @@ public final class LoadDriver {
       Duration duration,
       Duration clientTimeout,
       long seed) {
+    this.stack = stack;
     this.runId = runId;
     this.threads = threads;
     this.duration = duration;
@@ -95,9 +97,11 @@ public final class LoadDriver {
                     runId + "-setup-" + (2 * index),
                     JSON.writeValueAsString(
                         Map.of("currency", "EUR", "min_balance", 0, "normal_side", "CREDIT"))));
-        assertThat(created.status())
-            .as("account creation response: %s", created.body())
-            .isEqualTo(201);
+        String creationDescription = "account creation response: " + created.body();
+        if (created.status() != 201) {
+          creationDescription += " ledger_log_tail:" + stack.logTail("ledger", 200);
+        }
+        assertThat(created.status()).as(creationDescription).isEqualTo(201);
         UUID account = UUID.fromString(created.json().get("id").asString());
         accounts.add(account);
         Http.Response funded =
@@ -109,7 +113,11 @@ public final class LoadDriver {
                     JSON.writeValueAsString(
                         Map.of(
                             "account_id", account, "amount", ACCOUNT_FUNDING, "currency", "EUR"))));
-        assertThat(funded.status()).as("deposit response: %s", funded.body()).isEqualTo(201);
+        String depositDescription = "deposit response: " + funded.body();
+        if (funded.status() != 201) {
+          depositDescription += " ledger_log_tail:" + stack.logTail("ledger", 200);
+        }
+        assertThat(funded.status()).as(depositDescription).isEqualTo(201);
         deposited += ACCOUNT_FUNDING;
       }
     } catch (IOException e) {
