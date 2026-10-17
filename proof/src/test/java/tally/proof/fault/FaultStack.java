@@ -101,6 +101,16 @@ public final class FaultStack implements AutoCloseable {
   private static final long WORKER_MEMORY_MB = 768;
   private static final long K6_MEMORY_MB = 512;
   private static final Logger LOGGER = Logger.getLogger(FaultStack.class.getName());
+  private static final WaitStrategy NO_WAIT =
+      new WaitStrategy() {
+        @Override
+        public void waitUntilReady(WaitStrategyTarget target) {}
+
+        @Override
+        public WaitStrategy withStartupTimeout(Duration startupTimeout) {
+          return this;
+        }
+      };
 
   private final DockerClient dockerClient;
   private final Network network;
@@ -289,6 +299,25 @@ public final class FaultStack implements AutoCloseable {
   }
 
   public void start(String alias) {
+    Part part = startContainer(alias);
+    if (part == Part.WORKER || part == Part.WORKER2) {
+      awaitWorkerReadyOrHalt(alias, READY_TIMEOUT);
+    } else {
+      awaitReady(alias, READY_TIMEOUT);
+    }
+    if (part == Part.TOXIPROXY) {
+      restoreProxy();
+    }
+  }
+
+  public void startNoWait(String alias) {
+    Part part = startContainer(alias);
+    if (part == Part.TOXIPROXY) {
+      restoreProxy();
+    }
+  }
+
+  private Part startContainer(String alias) {
     Part part = part(alias);
     GenericContainer<?> container = container(part);
     try {
@@ -312,14 +341,7 @@ public final class FaultStack implements AutoCloseable {
     } finally {
       reserveIfStopped(part);
     }
-    if (part == Part.WORKER || part == Part.WORKER2) {
-      awaitWorkerReadyOrHalt(alias, READY_TIMEOUT);
-    } else {
-      awaitReady(alias, READY_TIMEOUT);
-    }
-    if (part == Part.TOXIPROXY) {
-      restoreProxy();
-    }
+    return part;
   }
 
   public void restart(String alias, int stopTimeoutSeconds) {
@@ -812,10 +834,7 @@ public final class FaultStack implements AutoCloseable {
           case TOXIPROXY ->
               new ToxiproxyContainer("ghcr.io/shopify/toxiproxy:2.12.0").withExposedPorts(8474);
           case LEDGER ->
-              new GenericContainer<>(LEDGER_IMAGE)
-                  .withExposedPorts(8080)
-                  .waitingFor(
-                      Wait.forHttp("/ready").forStatusCode(200).withStartupTimeout(READY_TIMEOUT));
+              new GenericContainer<>(LEDGER_IMAGE).withExposedPorts(8080).waitingFor(NO_WAIT);
           case KAFKA ->
               new GenericContainer<>(KAFKA_IMAGE)
                   .withExposedPorts(29092)
@@ -833,18 +852,7 @@ public final class FaultStack implements AutoCloseable {
                   .waitingFor(
                       Wait.forHttp("/ready").forStatusCode(200).withStartupTimeout(READY_TIMEOUT));
           case WORKER, WORKER2 ->
-              new GenericContainer<>(LEDGER_IMAGE)
-                  .withExposedPorts(8084)
-                  .waitingFor(
-                      new WaitStrategy() {
-                        @Override
-                        public void waitUntilReady(WaitStrategyTarget target) {}
-
-                        @Override
-                        public WaitStrategy withStartupTimeout(Duration startupTimeout) {
-                          return this;
-                        }
-                      });
+              new GenericContainer<>(LEDGER_IMAGE).withExposedPorts(8084).waitingFor(NO_WAIT);
         };
     int containerPort =
         switch (part) {

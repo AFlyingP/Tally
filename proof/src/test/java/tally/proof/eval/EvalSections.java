@@ -2,40 +2,62 @@ package tally.proof.eval;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.SplittableRandom;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
 import org.junit.platform.launcher.Launcher;
 import org.junit.platform.launcher.LauncherDiscoveryRequest;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
 import org.junit.platform.launcher.listeners.SummaryGeneratingListener;
+import tally.platform.security.Role;
 import tally.proof.concurrency.ConcurrencyRun;
 import tally.proof.concurrency.Workload;
 import tally.proof.fault.FaultResult;
 import tally.proof.fault.FaultStack;
 import tally.proof.fault.FaultSuiteTest;
 import tally.proof.fault.Scenario;
+import tally.proof.harness.Http;
 import tally.proof.harness.InProcessLedger;
+import tally.proof.harness.LedgerClient;
 import tally.proof.harness.Sizes;
 import tally.proof.naive.NaiveConfig;
 import tally.proof.seeded.SeededMonitoringTest;
 import tally.proof.seeded.SeededReconTest;
+import tools.jackson.databind.json.JsonMapper;
 
 public final class EvalSections {
 
+  private static final JsonMapper JSON = JsonMapper.builder().build();
   private static final List<String> STRATEGIES =
       List.of("pessimistic", "optimistic", "serializable");
 
@@ -256,6 +278,369 @@ public final class EvalSections {
     result.putAll(CoverageReport.tests(root));
     result.put("coverage", Map.of("packages", CoverageReport.coverage(root)));
     return result;
+  }
+
+  public static Map<String, Object> recovery(long seed) {
+    List<Double> apiTimes = new ArrayList<>();
+    List<Double> dbTimes = new ArrayList<>();
+    try (FaultStack stack =
+        FaultStack.start(
+            "pessimistic",
+            EnumSet.of(
+                FaultStack.Part.POSTGRES, FaultStack.Part.TOXIPROXY, FaultStack.Part.LEDGER))) {
+      LedgerClient client = new LedgerClient(stack.ledgerUrl(), stack.issuer().token(Role.ADMIN));
+      Http.Response created = client.createAccount(0, true);
+      if (created.status() != 201) {
+        throw new IllegalStateException("recovery account creation failed: " + created.status());
+      }
+      String accountId = created.json().get("id").asString();
+      for (int run = 0; run < 20; run++) {
+        stack.kill("ledger");
+        long started = System.nanoTime();
+        stack.startNoWait("ledger");
+        apiTimes.add(awaitAccount(stack, accountId, started));
+      }
+      for (int run = 0; run < 20; run++) {
+        long started = System.nanoTime();
+        stack.restart("postgres", 10);
+        dbTimes.add(awaitAccount(stack, accountId, started));
+      }
+    }
+    return Map.of(
+        "recovery",
+        Map.of(
+            "api_kill_ms", withRuns(apiTimes),
+            "db_restart_ms", withRuns(dbTimes)));
+  }
+
+  public static Map<String, Object> payments(long seed) {
+    try (FaultStack stack =
+        FaultStack.start(
+            "pessimistic",
+            EnumSet.of(
+                FaultStack.Part.POSTGRES,
+                FaultStack.Part.EXTBANK,
+                FaultStack.Part.LEDGER,
+                FaultStack.Part.WORKER))) {
+      PaymentRun run = new PaymentRun(stack, seed);
+      return Map.of("payments", run.execute());
+    }
+  }
+
+  private static Map<String, Object> withRuns(List<Double> times) {
+    Map<String, Object> result = new LinkedHashMap<>(Results.stats(times));
+    result.put("runs", times.size());
+    return result;
+  }
+
+  private static double awaitAccount(FaultStack stack, String accountId, long started) {
+    HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(1)).build();
+    long deadline = started + Duration.ofSeconds(120).toNanos();
+    try {
+      while (System.nanoTime() < deadline) {
+        HttpRequest request =
+            HttpRequest.newBuilder(URI.create(stack.ledgerUrl() + "/v1/accounts/" + accountId))
+                .timeout(Duration.ofSeconds(1))
+                .GET()
+                .build();
+        try {
+          HttpResponse<Void> response =
+              client.send(request, HttpResponse.BodyHandlers.discarding());
+          if (response.statusCode() == 200) {
+            return (System.nanoTime() - started) / 1_000_000.0;
+          }
+        } catch (IOException ignored) {
+          // The service can refuse connections while its container is starting.
+        }
+        TimeUnit.MILLISECONDS.sleep(50);
+      }
+      throw new IllegalStateException("account endpoint did not recover within 120 seconds");
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("recovery polling interrupted", e);
+    } finally {
+      client.close();
+    }
+  }
+
+  private static final class PaymentRun {
+    private static final int PAYMENT_COUNT = 2_000;
+    private static final int SOURCE_COUNT = 100;
+    private static final long SOURCE_FUNDING = 1_000_000;
+    private static final Duration PAYMENT_WINDOW = Duration.ofSeconds(120);
+    private final FaultStack stack;
+    private final SplittableRandom random;
+    private final LedgerClient client;
+    private final List<UUID> sources = new ArrayList<>();
+    private final List<UUID> payments = Collections.synchronizedList(new ArrayList<>());
+    private final List<Future<?>> requests = new ArrayList<>();
+    private ExecutorService clients;
+    private long deposits;
+
+    private PaymentRun(FaultStack stack, long seed) {
+      this.stack = stack;
+      random = new SplittableRandom(seed);
+      client = new LedgerClient(stack.ledgerUrl(), stack.issuer().token(Role.ADMIN));
+    }
+
+    private Map<String, Object> execute() {
+      try {
+        setup();
+        stack.withEnv("worker", "TALLY_LEDGER_ROLES", "orchestrator,expiry");
+        stack.withEnv("worker", "TALLY_FAILPOINT", "");
+        stack.start("worker");
+        clients = Executors.newFixedThreadPool(8);
+        long started = System.nanoTime();
+        AtomicReference<Throwable> restartFailure = new AtomicReference<>();
+        Thread restarts =
+            new Thread(
+                () -> {
+                  try {
+                    for (int index = 0; index < 3; index++) {
+                      sleepUntil(started + Duration.ofSeconds(30L * (index + 1)).toNanos());
+                      restartAtFailpoint(index);
+                    }
+                  } catch (Throwable failure) {
+                    restartFailure.set(failure);
+                  }
+                },
+                "payment-failpoints");
+        restarts.start();
+        for (int index = 0; index < PAYMENT_COUNT; index++) {
+          long target = started + PAYMENT_WINDOW.toNanos() * index / PAYMENT_COUNT;
+          sleepUntil(target);
+          int paymentIndex = index;
+          UUID source = sources.get(random.nextInt(sources.size()));
+          long amount = random.nextLong(1, 5_001);
+          String creditor = String.format("CRED-%04d", index % 60);
+          requests.add(clients.submit(() -> createPayment(paymentIndex, source, amount, creditor)));
+        }
+        sleepUntil(started + PAYMENT_WINDOW.toNanos());
+        restarts.join();
+        if (restartFailure.get() != null) {
+          throw new IllegalStateException("payment worker restart failed", restartFailure.get());
+        }
+        for (Future<?> request : requests) {
+          request.get();
+        }
+        clients.close();
+        clients = null;
+        awaitPayments();
+        Map<String, Integer> states = states();
+        long money = conservationDifference();
+        int violations = stack.checker(false, false).size();
+        Map<String, Double> shares = new LinkedHashMap<>();
+        for (String state : List.of("SETTLED", "REJECTED_COMPENSATED", "MANUAL_REVIEW", "FAILED")) {
+          shares.put(
+              state,
+              BigDecimal.valueOf(states.getOrDefault(state, 0) / (double) PAYMENT_COUNT)
+                  .setScale(4, RoundingMode.HALF_UP)
+                  .doubleValue());
+        }
+        return Map.of(
+            "count", payments.size(),
+            "shares", shares,
+            "created_or_lost", money,
+            "violations", violations);
+      } catch (Exception e) {
+        throw new IllegalStateException("payment evaluation failed", e);
+      } finally {
+        if (clients != null) {
+          clients.shutdownNow();
+        }
+        stopWorker(stack);
+        clearRules(stack);
+      }
+    }
+
+    private void setup() throws SQLException {
+      clearRules(stack);
+      for (int index = 0; index < SOURCE_COUNT; index++) {
+        Http.Response response = client.createAccount(0, true);
+        requireStatus(response, 201, "payment source creation");
+        UUID account = UUID.fromString(response.json().get("id").asString());
+        sources.add(account);
+        requireStatus(
+            client.deposit("eval-payment-fund-" + index, account, SOURCE_FUNDING),
+            201,
+            "payment source funding");
+        deposits += SOURCE_FUNDING;
+      }
+      List<ExtbankRule> rules = new ArrayList<>();
+      addRules(rules, "ACCEPT", 0, 10);
+      addRules(rules, "REJECT", 0, 10);
+      addRules(rules, "DELAY", 100, 5);
+      addRules(rules, "DELAY", 600, 5);
+      addRules(rules, "DROP_RESPONSE", 400, 10);
+      addRules(rules, "CONFIRM_TWICE", 0, 10);
+      addRules(rules, "SERVER_ERROR", 0, 10);
+      for (int index = 0; index < rules.size(); index++) {
+        ExtbankRule rule = rules.get(index);
+        addRule(String.format("CRED-%04d", index), rule.behaviour(), rule.delayMs(), null);
+      }
+    }
+
+    private static void addRules(
+        List<ExtbankRule> rules, String behaviour, int delayMs, int count) {
+      for (int index = 0; index < count; index++) {
+        rules.add(new ExtbankRule(behaviour, delayMs));
+      }
+    }
+
+    private void createPayment(int index, UUID source, long amount, String creditor) {
+      Http.Response response =
+          client.createPayment("eval-payment-" + index, source, amount, creditor);
+      requireStatus(response, 202, "payment creation");
+      payments.add(UUID.fromString(response.json().get("id").asString()));
+    }
+
+    private void restartAtFailpoint(int index) {
+      String[] failpoints = {"payment.after_hold", "payment.after_capture", "payment.after_submit"};
+      stack.kill("worker");
+      stack.withEnv("worker", "TALLY_FAILPOINT", failpoints[index]);
+      stack.start("worker");
+      try {
+        stack.awaitExit("worker", Duration.ofSeconds(30));
+      } catch (IllegalStateException e) {
+        if (!stack.running("worker")) {
+          throw e;
+        }
+        stack.kill("worker");
+      }
+      stack.withEnv("worker", "TALLY_FAILPOINT", "");
+      stack.start("worker");
+    }
+
+    private void awaitPayments() {
+      long end = System.nanoTime() + Duration.ofSeconds(300).toNanos();
+      while (System.nanoTime() < end) {
+        if (terminalCount() == PAYMENT_COUNT) {
+          return;
+        }
+        try {
+          TimeUnit.MILLISECONDS.sleep(100);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new IllegalStateException("payment wait interrupted", e);
+        }
+      }
+      throw new IllegalStateException("payments did not become terminal within 300 seconds");
+    }
+
+    private int terminalCount() {
+      return paymentCount("state IN ('SETTLED','REJECTED_COMPENSATED','MANUAL_REVIEW','FAILED')");
+    }
+
+    private int paymentCount(String predicate) {
+      try (Connection connection = stack.jdbc();
+          PreparedStatement query =
+              connection.prepareStatement(
+                  "SELECT count(*) FROM ledger.external_payment WHERE " + predicate)) {
+        try (ResultSet rows = query.executeQuery()) {
+          rows.next();
+          return rows.getInt(1);
+        }
+      } catch (SQLException e) {
+        throw new IllegalStateException("failed to read payments", e);
+      }
+    }
+
+    private Map<String, Integer> states() {
+      try (Connection connection = stack.jdbc();
+          PreparedStatement query =
+              connection.prepareStatement(
+                  "SELECT state, count(*) FROM ledger.external_payment GROUP BY state")) {
+        Map<String, Integer> result = new HashMap<>();
+        try (ResultSet rows = query.executeQuery()) {
+          while (rows.next()) {
+            result.put(rows.getString(1), rows.getInt(2));
+          }
+        }
+        return result;
+      } catch (SQLException e) {
+        throw new IllegalStateException("failed to read payment states", e);
+      }
+    }
+
+    private long conservationDifference() throws SQLException {
+      try (Connection connection = stack.jdbc();
+          PreparedStatement query =
+              connection.prepareStatement(
+                  "SELECT (SELECT coalesce(sum(balance),0) FROM ledger.account WHERE kind='CUSTOMER') "
+                      + "+ (SELECT coalesce(sum(balance),0) FROM ledger.account WHERE kind='CLEARING' AND currency='EUR') "
+                      + "+ (SELECT coalesce(sum(amount),0) FROM ledger.external_payment WHERE state='SETTLED')")) {
+        try (ResultSet rows = query.executeQuery()) {
+          rows.next();
+          return Math.abs(deposits - rows.getLong(1));
+        }
+      }
+    }
+
+    private void addRule(String creditor, String behaviour, int delay, Integer remaining) {
+      Map<String, Object> body = new LinkedHashMap<>();
+      body.put("creditor_account", creditor);
+      body.put("behaviour", behaviour);
+      body.put("delay_ms", delay);
+      if (remaining != null) {
+        body.put("remaining", remaining);
+      }
+      Http.Response response =
+          Http.post(
+              stack.extbankUrl() + "/control/rules",
+              null,
+              JSON.writeValueAsString(body),
+              "X-Api-Key",
+              stack.extbankApiKey());
+      requireStatus(response, 201, "external bank rule");
+    }
+
+    private static void clearRules(FaultStack stack) {
+      HttpRequest request =
+          HttpRequest.newBuilder(URI.create(stack.extbankUrl() + "/control/rules"))
+              .header("X-Api-Key", stack.extbankApiKey())
+              .DELETE()
+              .build();
+      try {
+        int status =
+            HttpClient.newHttpClient()
+                .send(request, HttpResponse.BodyHandlers.discarding())
+                .statusCode();
+        if (status != 204) {
+          throw new IllegalStateException("clear external bank rules returned " + status);
+        }
+      } catch (IOException e) {
+        throw new IllegalStateException("failed to clear external bank rules", e);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("clearing external bank rules interrupted", e);
+      }
+    }
+
+    private static void requireStatus(Http.Response response, int status, String action) {
+      if (response.status() != status) {
+        throw new IllegalStateException(
+            action + " returned " + response.status() + ": " + response.body());
+      }
+    }
+
+    private static void stopWorker(FaultStack stack) {
+      if (stack.running("worker")) {
+        stack.kill("worker");
+      }
+    }
+
+    private static void sleepUntil(long deadline) {
+      long remaining;
+      while ((remaining = deadline - System.nanoTime()) > 0) {
+        LockSupport.parkNanos(remaining);
+        if (Thread.interrupted()) {
+          Thread.currentThread().interrupt();
+          throw new IllegalStateException("payment schedule interrupted");
+        }
+      }
+    }
+
+    private record ExtbankRule(String behaviour, int delayMs) {}
   }
 
   private static Map<String, Object> concurrencyResult(
