@@ -426,11 +426,14 @@ class PaymentOrchestratorIT extends LedgerIT {
     orchestrator.runOnce();
     List<String> actions = new ArrayList<>();
     Set<UUID> auditIds = new HashSet<>();
+    Set<String> jobRequestIds = new HashSet<>();
     try (Connection db = appJdbc();
         PreparedStatement query =
             db.prepareStatement(
-                "SELECT e.audit_id, a.action, a.resource_type, a.resource_id, a.request_id, a.actor "
+                "SELECT e.audit_id, a.action, a.resource_type, a.resource_id, a.request_id, "
+                    + "a.actor, t.request_id AS transaction_request_id "
                     + "FROM ledger.payment_event e LEFT JOIN ledger.audit_log a ON a.id = e.audit_id "
+                    + "LEFT JOIN ledger.ledger_transaction t ON t.id = a.transaction_id "
                     + "WHERE e.payment_id = ? ORDER BY e.id")) {
       query.setObject(1, payment.id());
       try (ResultSet rows = query.executeQuery()) {
@@ -439,14 +442,24 @@ class PaymentOrchestratorIT extends LedgerIT {
           actions.add(rows.getString("action"));
           assertThat(rows.getString("resource_type")).isEqualTo("external_payment");
           assertThat(rows.getString("resource_id")).isEqualTo(payment.id().toString());
-          assertThat(rows.getString("request_id")).isEqualTo(payment.requestId());
-          if (!"payment.create".equals(rows.getString("action"))) {
+          String action = rows.getString("action");
+          String requestId = rows.getString("request_id");
+          if ("payment.create".equals(action)) {
+            assertThat(requestId).isEqualTo(payment.requestId());
+          } else {
+            assertThat(UUID.fromString(requestId).toString()).isEqualTo(requestId);
+            assertThat(requestId).isNotEqualTo(payment.requestId());
+            assertThat(jobRequestIds.add(requestId)).isTrue();
             assertThat(rows.getString("actor")).isEqualTo("job:orchestrator");
+            if ("payment.capture".equals(action) || "payment.settle".equals(action)) {
+              assertThat(rows.getString("transaction_request_id")).isEqualTo(requestId);
+            }
           }
         }
       }
     }
     assertThat(auditIds).hasSize(5);
+    assertThat(jobRequestIds).hasSize(4);
     assertThat(actions)
         .containsExactly(
             "payment.create",

@@ -115,7 +115,7 @@ public class PaymentOrchestrator implements JobConfig.Job {
       case SUBMITTING -> steps.markUnknown(payment, 0, now(), "resumed");
       case UNKNOWN -> {
         ExtbankClient.StatusResult result =
-            bank.status(payment.externalReference(), payment.requestId());
+            bank.status(payment.externalReference(), UUID.randomUUID().toString());
         yield resolve(payment, result instanceof ExtbankClient.NotFound ? submit(payment) : result);
       }
       case SETTLED, REJECTED_COMPENSATED, MANUAL_REVIEW, FAILED -> Optional.empty();
@@ -128,7 +128,7 @@ public class PaymentOrchestrator implements JobConfig.Job {
         payment.creditorAccount(),
         payment.amount(),
         payment.currency(),
-        payment.requestId());
+        UUID.randomUUID().toString());
   }
 
   private Optional<PaymentRow> resolve(PaymentRow payment, Object result) {

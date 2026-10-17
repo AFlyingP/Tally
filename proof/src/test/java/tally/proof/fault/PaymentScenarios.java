@@ -46,9 +46,6 @@ public final class PaymentScenarios {
           ON a.resource_type = 'external_payment' AND a.resource_id = p.id::text
         UNION
         SELECT p.id, a.id, a.action, a.transaction_id
-        FROM payments p JOIN ledger.audit_log a ON a.request_id = p.request_id
-        UNION
-        SELECT p.id, a.id, a.action, a.transaction_id
         FROM payments p JOIN ledger.payment_event e ON e.payment_id = p.id
         JOIN ledger.audit_log a ON a.id = e.audit_id
       ), payment_holds AS (
@@ -67,9 +64,6 @@ public final class PaymentScenarios {
         SELECT p.id AS payment_id, t.id, t.kind
         FROM payments p JOIN ledger.ledger_transaction t
           ON t.id IN (p.capture_transaction_id, p.resolution_transaction_id)
-        UNION
-        SELECT p.id, t.id, t.kind
-        FROM payments p JOIN ledger.ledger_transaction t ON t.request_id = p.request_id
         UNION
         SELECT p.id, t.id, t.kind
         FROM payments p JOIN ledger.idempotency_key k

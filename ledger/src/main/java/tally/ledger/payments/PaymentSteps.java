@@ -73,6 +73,7 @@ public class PaymentSteps {
   }
 
   public Optional<PaymentRow> hold(PaymentRow payment) {
+    String requestId = UUID.randomUUID().toString();
     return execute(
         payment,
         tx -> {
@@ -91,7 +92,7 @@ public class PaymentSteps {
                     payment.currency(),
                     payment.amount(),
                     now.plus(Duration.ofHours(1)),
-                    entry(payment, "payment.hold"),
+                    entry(payment, "payment.hold", requestId),
                     CALLER);
             return transition(
                 tx.connection(),
@@ -103,12 +104,13 @@ public class PaymentSteps {
                 placed.auditId());
           } catch (LedgerRuleException exception) {
             tx.connection().rollback(work);
-            return failIn(tx.connection(), payment, exception.code().name(), now);
+            return failIn(tx.connection(), payment, exception.code().name(), now, requestId);
           }
         });
   }
 
   public Optional<PaymentRow> capture(PaymentRow payment) {
+    String requestId = UUID.randomUUID().toString();
     return execute(
         payment,
         tx -> {
@@ -128,9 +130,9 @@ public class PaymentSteps {
                     payment.amount(),
                     clearing,
                     false,
-                    entry(payment, "payment.capture"),
+                    entry(payment, "payment.capture", requestId),
                     CALLER,
-                    payment.requestId());
+                    requestId);
             return transition(
                 tx.connection(),
                 payment,
@@ -141,7 +143,7 @@ public class PaymentSteps {
                 posted.auditId());
           } catch (LedgerRuleException exception) {
             tx.connection().rollback(work);
-            return failIn(tx.connection(), payment, exception.code().name(), now);
+            return failIn(tx.connection(), payment, exception.code().name(), now, requestId);
           }
         });
   }
@@ -171,6 +173,7 @@ public class PaymentSteps {
   }
 
   public Optional<PaymentRow> settle(PaymentRow payment, LocalDate valueDate) {
+    String requestId = UUID.randomUUID().toString();
     return execute(
         payment,
         tx -> {
@@ -188,7 +191,8 @@ public class PaymentSteps {
                   key.getAsLong(),
                   TransactionKind.EXTERNAL_SETTLEMENT,
                   Posting.move(payment.currency(), clearing, settlement, payment.amount()),
-                  "payment.settle");
+                  "payment.settle",
+                  requestId);
           return transition(
               tx.connection(),
               payment,
@@ -201,6 +205,7 @@ public class PaymentSteps {
   }
 
   public Optional<PaymentRow> compensate(PaymentRow payment, String reason) {
+    String requestId = UUID.randomUUID().toString();
     return execute(
         payment,
         tx -> {
@@ -223,7 +228,8 @@ public class PaymentSteps {
                   key.getAsLong(),
                   TransactionKind.EXTERNAL_COMPENSATION,
                   posting,
-                  "payment.compensate");
+                  "payment.compensate",
+                  requestId);
           return transition(
               tx.connection(),
               payment,
@@ -246,11 +252,13 @@ public class PaymentSteps {
   }
 
   public Optional<PaymentRow> fail(PaymentRow payment, String reason) {
-    return execute(payment, tx -> failIn(tx.connection(), payment, reason, now()));
+    String requestId = UUID.randomUUID().toString();
+    return execute(payment, tx -> failIn(tx.connection(), payment, reason, now(), requestId));
   }
 
   private Optional<PaymentRow> change(
       PaymentRow payment, PaymentState to, String action, Changes changes, String detail) {
+    String requestId = UUID.randomUUID().toString();
     return execute(
         payment,
         tx ->
@@ -261,10 +269,11 @@ public class PaymentSteps {
                 changes,
                 detail,
                 now(),
-                audit.record(tx.connection(), entry(payment, action))));
+                audit.record(tx.connection(), entry(payment, action, requestId))));
   }
 
-  private StepResult failIn(Connection connection, PaymentRow payment, String reason, Instant now)
+  private StepResult failIn(
+      Connection connection, PaymentRow payment, String reason, Instant now, String requestId)
       throws SQLException {
     return transition(
         connection,
@@ -273,7 +282,7 @@ public class PaymentSteps {
         new Changes(null, null, null, null, null, null, reason),
         reason,
         now,
-        audit.record(connection, entry(payment, "payment.fail")));
+        audit.record(connection, entry(payment, "payment.fail", requestId)));
   }
 
   private PostedTransaction post(
@@ -282,7 +291,8 @@ public class PaymentSteps {
       long keyId,
       TransactionKind kind,
       Posting posting,
-      String action)
+      String action,
+      String requestId)
       throws SQLException {
     tx.accounts(posting.accountIds());
     return writer.post(
@@ -294,9 +304,9 @@ public class PaymentSteps {
             null,
             null,
             Map.of(),
-            entry(payment, action),
+            entry(payment, action, requestId),
             CALLER,
-            payment.requestId()));
+            requestId));
   }
 
   private StepResult transition(
@@ -349,9 +359,9 @@ public class PaymentSteps {
     }
   }
 
-  private static AuditEntry entry(PaymentRow payment, String action) {
+  private static AuditEntry entry(PaymentRow payment, String action, String requestId) {
     return AuditEntry.success(
-        CALLER, action, "external_payment", payment.id().toString(), payment.requestId());
+        CALLER, action, "external_payment", payment.id().toString(), requestId);
   }
 
   private static Changes unchanged() {
