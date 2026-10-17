@@ -20,9 +20,14 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.Tag;
@@ -159,7 +164,9 @@ public class SeededMonitoringTest {
     properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
     properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
     properties.put(ProducerConfig.ACKS_CONFIG, "all");
+    properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
     try (KafkaProducer<String, String> producer = new KafkaProducer<>(properties)) {
+      List<Future<RecordMetadata>> sends = new ArrayList<>();
       for (Event event : events) {
         for (int delivery = 0; delivery < deliveries; delivery++) {
           ProducerRecord<String, String> record =
@@ -167,10 +174,25 @@ public class SeededMonitoringTest {
           byte[] eventId = event.eventId().toString().getBytes(StandardCharsets.UTF_8);
           record.headers().add("event_id", eventId);
           record.headers().add("request_id", eventId);
-          producer.send(record);
+          sends.add(producer.send(record));
         }
       }
       producer.flush();
+      awaitPublished(sends, FaultStack.MONITOR_TOPIC);
+    }
+  }
+
+  private static void awaitPublished(List<Future<RecordMetadata>> sends, String topic) {
+    for (Future<RecordMetadata> send : sends) {
+      try {
+        send.get(30, TimeUnit.SECONDS);
+      } catch (ExecutionException | TimeoutException e) {
+        throw new IllegalStateException("failed to publish record to topic " + topic, e);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException(
+            "interrupted while publishing records to topic " + topic, e);
+      }
     }
   }
 

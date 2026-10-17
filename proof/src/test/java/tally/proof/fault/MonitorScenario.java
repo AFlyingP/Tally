@@ -10,15 +10,21 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.serialization.StringSerializer;
 import tally.proof.harness.Sizes;
 import tally.proof.seeded.TrafficGenerator;
@@ -81,16 +87,33 @@ public final class MonitorScenario {
     properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
     properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
     properties.put(ProducerConfig.ACKS_CONFIG, "all");
+    properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
     try (KafkaProducer<String, String> producer = new KafkaProducer<>(properties)) {
+      List<Future<RecordMetadata>> sends = new ArrayList<>();
       for (Event event : events) {
         ProducerRecord<String, String> record =
             new ProducerRecord<>(FaultStack.MONITOR_TOPIC, event.key(), event.json());
         byte[] eventId = event.eventId().toString().getBytes(StandardCharsets.UTF_8);
         record.headers().add("event_id", eventId);
         record.headers().add("request_id", eventId);
-        producer.send(record);
+        sends.add(producer.send(record));
       }
       producer.flush();
+      awaitPublished(sends, FaultStack.MONITOR_TOPIC);
+    }
+  }
+
+  private static void awaitPublished(List<Future<RecordMetadata>> sends, String topic) {
+    for (Future<RecordMetadata> send : sends) {
+      try {
+        send.get(30, TimeUnit.SECONDS);
+      } catch (ExecutionException | TimeoutException e) {
+        throw new IllegalStateException("failed to publish record to topic " + topic, e);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException(
+            "interrupted while publishing records to topic " + topic, e);
+      }
     }
   }
 
