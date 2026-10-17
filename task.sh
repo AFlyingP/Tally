@@ -75,7 +75,9 @@ case "$target" in
     ;;
   eval)
     images
+    rm -f build/eval/exit_code
     $G :proof:eval --quiet --console=plain -Pproof.size=eval -PcmdArgs="$*"
+    exit "$(cat build/eval/exit_code)"
     ;;
   render) $G :proof:render --quiet --console=plain -PcmdArgs="$*" ;;
   clean)

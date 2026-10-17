@@ -22,6 +22,21 @@ public final class Results {
       new DefaultPrettyPrinter()
           .withObjectIndenter(new DefaultIndenter("  ", "\n"))
           .withArrayIndenter(new DefaultIndenter("  ", "\n"));
+  private static final List<String> SECTION_ORDER =
+      List.of(
+          "concurrency",
+          "property",
+          "faults",
+          "recovery",
+          "comparison",
+          "mutation",
+          "coverage",
+          "payments",
+          "events",
+          "recon",
+          "monitoring",
+          "audit",
+          "baseline");
 
   private Results() {}
 
@@ -36,11 +51,46 @@ public final class Results {
   }
 
   public static Map<String, Object> readSection(Path dir, String name) {
+    return read(dir.resolve(name + ".json"), "failed to read results section");
+  }
+
+  public static void merge(Path sectionsDir, Path out, Map<String, Object> header) {
+    LinkedHashMap<String, Object> merged = new LinkedHashMap<>(header);
+    try {
+      for (String section : SECTION_ORDER) {
+        Path file = sectionsDir.resolve(section + ".json");
+        if (!Files.exists(file)) {
+          continue;
+        }
+        Map<String, Object> content = readSection(sectionsDir, section);
+        if (section.equals("coverage")) {
+          for (String key : List.of("tests", "coverage")) {
+            if (content.containsKey(key)) {
+              merged.put(key, content.get(key));
+            }
+          }
+        } else {
+          merged.putAll(content);
+        }
+      }
+      Files.createDirectories(out.getParent());
+      String json = JSON.writer().with(PRETTY_PRINTER).writeValueAsString(merged) + "\n";
+      Files.writeString(out, json, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new UncheckedIOException("failed to merge results", e);
+    }
+  }
+
+  public static Map<String, Object> readResults(Path path) {
+    return read(path, "failed to read results");
+  }
+
+  private static Map<String, Object> read(Path path, String failureMessage) {
     String json;
     try {
-      json = Files.readString(dir.resolve(name + ".json"), StandardCharsets.UTF_8);
+      json = Files.readString(path, StandardCharsets.UTF_8);
     } catch (IOException e) {
-      throw new UncheckedIOException("failed to read results section", e);
+      throw new UncheckedIOException(failureMessage, e);
     }
     return JSON.readValue(json, new TypeReference<LinkedHashMap<String, Object>>() {});
   }

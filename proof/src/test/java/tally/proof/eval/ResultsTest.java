@@ -62,4 +62,28 @@ class ResultsTest {
                 + "  ]\n"
                 + "}\n");
   }
+
+  @Test
+  void mergeOrdersHeaderAndSectionsAndSplitsCoverage(@TempDir Path directory) {
+    Path sections = directory.resolve("sections");
+    Path output = directory.resolve("results.json");
+    Results.writeSection(sections, "baseline", Map.of("baseline", Map.of("value", 1)));
+    Results.writeSection(
+        sections,
+        "coverage",
+        Map.of("tests", Map.of("count", 5), "coverage", Map.of("packages", List.of())));
+    Results.writeSection(sections, "concurrency", Map.of("concurrency", Map.of("value", 2)));
+    Results.writeSection(sections, "recon", Map.of("recon", Map.of("value", 3)));
+    LinkedHashMap<String, Object> header = new LinkedHashMap<>();
+    header.put("generated_at", "now");
+    header.put("seed", 42);
+
+    Results.merge(sections, output, header);
+
+    Map<String, Object> merged = Results.readResults(output);
+    assertThat(merged.keySet())
+        .containsExactly(
+            "generated_at", "seed", "concurrency", "tests", "coverage", "recon", "baseline");
+    assertThat(merged).containsKeys("tests", "coverage").doesNotContainKey("mutation");
+  }
 }

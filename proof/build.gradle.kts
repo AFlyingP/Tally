@@ -33,6 +33,7 @@ fun Test.passProofProps() {
 }
 
 val testSet = the<SourceSetContainer>()["test"]
+val evalExitCodeFile = rootDir.resolve("build/eval/exit_code")
 
 tasks.register<Test>("proofTest") {
     description = "Runs the proof suites at the selected size."
@@ -51,4 +52,23 @@ tasks.register<Test>("e2eTest") {
     classpath = testSet.runtimeClasspath
     useJUnitPlatform { includeTags("e2e") }
     passProofProps()
+}
+
+tasks.register<JavaExec>("eval") {
+    description = "Runs the evaluation and writes build/eval/results.json."
+    group = "verification"
+    classpath = testSet.runtimeClasspath
+    mainClass = "tally.proof.eval.EvalMain"
+    workingDir = rootDir
+    maxHeapSize = "2g"
+    args = findProperty("cmdArgs")?.toString()?.split(" ")?.filter { it.isNotBlank() } ?: emptyList()
+    systemProperty("proof.size", "eval")
+    systemProperty("proof.root", rootDir.path)
+    systemProperty("proof.seed", findProperty("proof.seed") ?: "20260101")
+    dependsOn("testClasses")
+    isIgnoreExitValue = true
+    doLast {
+        evalExitCodeFile.parentFile.mkdirs()
+        evalExitCodeFile.writeText("${executionResult.get().exitValue}\n")
+    }
 }
