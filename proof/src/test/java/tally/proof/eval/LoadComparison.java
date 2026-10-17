@@ -176,7 +176,7 @@ public final class LoadComparison {
     row.put("strategy", strategy);
     row.put("workload", workload);
     row.put("clients", clients);
-    row.put("runs", sizes.loadRuns());
+    row.put("runs", transfersPerSecond.size());
     row.put("transfers_per_s", Results.stats(transfersPerSecond));
     row.put("p50_ms", Results.stats(p50Ms));
     row.put("p99_ms", Results.stats(p99Ms));

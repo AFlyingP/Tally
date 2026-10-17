@@ -47,7 +47,7 @@ public final class AuditEval {
         runCycle(stack, token, index, counts);
       }
       waitForPending(stack);
-      int detected = tamper(stack, seed);
+      TamperCounts tamper = tamper(stack, seed);
       return Map.of(
           "audit",
           Map.of(
@@ -55,8 +55,8 @@ public final class AuditEval {
               "rows_per_change_min", counts.minimum,
               "rows_per_change_max", counts.maximum,
               "replays_with_rows", counts.replaysWithRows,
-              "tamper_cases", 20,
-              "tamper_detected", detected));
+              "tamper_cases", tamper.cases(),
+              "tamper_detected", tamper.detected()));
     } catch (SQLException e) {
       throw new IllegalStateException("audit evaluation failed", e);
     }
@@ -372,8 +372,9 @@ public final class AuditEval {
     throw new IllegalStateException("audit rows did not seal within 120 seconds");
   }
 
-  private static int tamper(FaultStack stack, long seed) throws SQLException {
+  private static TamperCounts tamper(FaultStack stack, long seed) throws SQLException {
     SplittableRandom random = new SplittableRandom(seed);
+    int cases = 0;
     int detected = 0;
     for (String kind : List.of("actor", "outcome", "row_hash", "prev_hash", "delete")) {
       for (int index = 0; index < 4; index++) {
@@ -382,6 +383,7 @@ public final class AuditEval {
         int bound = kind.equals("delete") ? rows.size() - 1 : rows.size();
         Sealed row = rows.get(random.nextInt(bound));
         mutate(stack, kind, row);
+        cases++;
         AuditVerifier.Report report = verify(stack);
         if (report.brokenSeq() != null && report.brokenSeq() <= row.seq() + 1) {
           detected++;
@@ -393,7 +395,7 @@ public final class AuditEval {
         }
       }
     }
-    return detected;
+    return new TamperCounts(cases, detected);
   }
 
   private static List<Sealed> sealedRows(FaultStack stack) throws SQLException {
@@ -554,6 +556,8 @@ public final class AuditEval {
   }
 
   private record Request(String type, String path, String body, String key, String requestId) {}
+
+  private record TamperCounts(int cases, int detected) {}
 
   private record TamperTarget(
       String table,

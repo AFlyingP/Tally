@@ -136,7 +136,28 @@ public final class EvalSections {
   }
 
   public static Map<String, Object> monitoring(Sizes sizes, long seed) {
-    return Map.of("monitoring", SeededMonitoringTest.measure(sizes, seed));
+    Map<String, Object> measured = SeededMonitoringTest.measure(sizes, seed);
+    List<?> measuredRules = (List<?>) measured.get("rules");
+    List<Map<String, Object>> rules = new ArrayList<>(measuredRules.size());
+    for (Object measuredRule : measuredRules) {
+      Map<?, ?> values = (Map<?, ?>) measuredRule;
+      Map<String, Object> rule = new LinkedHashMap<>();
+      for (Map.Entry<?, ?> entry : values.entrySet()) {
+        String key = (String) entry.getKey();
+        Object value = entry.getValue();
+        if (key.equals("precision") || key.equals("recall")) {
+          value =
+              BigDecimal.valueOf(((Number) value).doubleValue())
+                  .setScale(4, RoundingMode.HALF_UP)
+                  .doubleValue();
+        }
+        rule.put(key, value);
+      }
+      rules.add(rule);
+    }
+    Map<String, Object> result = new LinkedHashMap<>(measured);
+    result.put("rules", List.copyOf(rules));
+    return Map.of("monitoring", result);
   }
 
   public static Map<String, Object> faults(Sizes sizes, long seed) {
