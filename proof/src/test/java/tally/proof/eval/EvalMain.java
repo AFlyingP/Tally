@@ -15,6 +15,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import tally.proof.harness.Seeds;
 import tally.proof.harness.Sizes;
 
@@ -37,6 +38,8 @@ public final class EvalMain {
           "faults");
   private static final List<String> STRATEGIES =
       List.of("pessimistic", "optimistic", "serializable");
+  private static final List<String> COVERAGE_MODULES =
+      List.of("ledger-core", "platform", "ledger", "monitor", "auth", "extbank");
   private static final Object MISSING = new Object();
 
   private EvalMain() {}
@@ -46,6 +49,10 @@ public final class EvalMain {
   }
 
   static int run(String[] args, PrintStream out, PrintStream err) {
+    return run(args, out, err, EvalMain::runSection);
+  }
+
+  static int run(String[] args, PrintStream out, PrintStream err, SectionRunner sectionRunner) {
     Set<String> requested = new LinkedHashSet<>();
     for (String argument : args) {
       if (!SECTIONS.contains(argument)) {
@@ -77,8 +84,8 @@ public final class EvalMain {
       out.println("section " + section + " started");
       long started = System.nanoTime();
       try {
-        Results.writeSection(sectionsDir, section, runSection(section, sizes, seed));
-      } catch (Exception e) {
+        Results.writeSection(sectionsDir, section, sectionRunner.run(section, sizes, seed));
+      } catch (Exception | AssertionError e) {
         err.println("eval failed in " + section + ": " + message(e));
         e.printStackTrace(err);
         return 2;
@@ -97,8 +104,12 @@ public final class EvalMain {
       header.put("machine", MachineInfo.collect());
       Results.merge(sectionsDir, resultsFile, header);
       Map<String, Object> merged = Results.readResults(resultsFile);
+      Set<String> presentSections =
+          SECTIONS.stream()
+              .filter(name -> Files.exists(sectionsDir.resolve(name + ".json")))
+              .collect(Collectors.toCollection(LinkedHashSet::new));
       int misses = 0;
-      for (String miss : targetMisses(merged)) {
+      for (String miss : targetMisses(merged, presentSections)) {
         out.println("target missed: " + miss);
         misses++;
       }
@@ -112,28 +123,28 @@ public final class EvalMain {
         out.println("eval partial: missing " + String.join(", ", missing));
       }
       return misses == 0 ? 0 : 1;
-    } catch (Exception e) {
+    } catch (Exception | AssertionError e) {
       err.println("eval failed in results: " + message(e));
       e.printStackTrace(err);
       return 2;
     }
   }
 
-  static List<String> targetMisses(Map<String, Object> results) {
+  static List<String> targetMisses(Map<String, Object> results, Set<String> presentSections) {
     List<Target> targets = new ArrayList<>();
-    addConcurrencyTargets(results, targets);
-    addPropertyTargets(results, targets);
-    addFaultTargets(results, targets);
-    addRecoveryTargets(results, targets);
-    addComparisonTargets(results, targets);
-    addMutationTargets(results, targets);
-    addCoverageTargets(results, targets);
-    addPaymentTargets(results, targets);
-    addEventTargets(results, targets);
-    addReconTargets(results, targets);
-    addMonitoringTargets(results, targets);
-    addAuditTargets(results, targets);
-    addBaselineTargets(results, targets);
+    addConcurrencyTargets(results, presentSections, targets);
+    addPropertyTargets(results, presentSections, targets);
+    addFaultTargets(results, presentSections, targets);
+    addRecoveryTargets(results, presentSections, targets);
+    addComparisonTargets(results, presentSections, targets);
+    addMutationTargets(results, presentSections, targets);
+    addCoverageTargets(results, presentSections, targets);
+    addPaymentTargets(results, presentSections, targets);
+    addEventTargets(results, presentSections, targets);
+    addReconTargets(results, presentSections, targets);
+    addMonitoringTargets(results, presentSections, targets);
+    addAuditTargets(results, presentSections, targets);
+    addBaselineTargets(results, presentSections, targets);
 
     List<String> misses = new ArrayList<>();
     for (Target target : targets) {
@@ -168,8 +179,14 @@ public final class EvalMain {
     };
   }
 
-  private static void addConcurrencyTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("concurrency")) {
+  @FunctionalInterface
+  interface SectionRunner {
+    Map<String, Object> run(String name, Sizes sizes, long seed);
+  }
+
+  private static void addConcurrencyTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("concurrency")) {
       return;
     }
     for (String strategy : STRATEGIES) {
@@ -185,19 +202,22 @@ public final class EvalMain {
     }
   }
 
-  private static void addPropertyTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("property")) {
+  private static void addPropertyTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("property")) {
       return;
     }
     for (String strategy : STRATEGIES) {
       String prefix = "property." + strategy + ".";
       add(results, targets, prefix + "tries", "500", value -> equalsNumber(value, 500));
+      add(results, targets, prefix + "sequence_length", "100", value -> equalsNumber(value, 100));
       add(results, targets, prefix + "failures", "0", value -> equalsNumber(value, 0));
     }
   }
 
-  private static void addFaultTargets(Map<String, Object> results, List<Target> targets) {
-    if (!(results.get("faults") instanceof Map<?, ?>)) {
+  private static void addFaultTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("faults")) {
       return;
     }
     for (String strategy : STRATEGIES) {
@@ -243,9 +263,13 @@ public final class EvalMain {
     }
   }
 
-  private static void addRecoveryTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("recovery")) {
+  private static void addRecoveryTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("recovery")) {
       return;
+    }
+    for (String metric : List.of("api_kill_ms.runs", "db_restart_ms.runs")) {
+      add(results, targets, "recovery." + metric, "20", value -> equalsNumber(value, 20));
     }
     for (String metric : List.of("api_kill_ms.median", "db_restart_ms.median")) {
       add(
@@ -257,41 +281,52 @@ public final class EvalMain {
     }
   }
 
-  private static void addComparisonTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("comparison")) {
+  private static void addComparisonTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("comparison")) {
       return;
     }
     Object rowsObject = get(results, "comparison.rows");
     int rowCount = rowsObject instanceof List<?> rows ? rows.size() : -1;
     addAt(targets, "comparison.rows.length", "18", value -> equalsNumber(value, 18), rowCount);
-    if (!(rowsObject instanceof List<?> rows)) {
-      return;
-    }
-    for (int index = 0; index < rows.size(); index++) {
-      Object row = rows.get(index);
-      String prefix = "comparison.rows[" + index + "].";
-      addAt(targets, prefix + "runs", "5", value -> equalsNumber(value, 5), field(row, "runs"));
-      if ("pessimistic".equals(field(row, "strategy"))
-          && "uniform".equals(field(row, "workload"))
-          && equalsNumber(field(row, "clients"), 32)) {
-        addAt(
-            targets,
-            prefix + "transfers_per_s.median",
-            ">= 100",
-            value -> number(value) && ((Number) value).doubleValue() >= 100,
-            nestedField(row, "transfers_per_s", "median"));
-        addAt(
-            targets,
-            prefix + "p99_ms.median",
-            "<= 1000",
-            value -> number(value) && ((Number) value).doubleValue() <= 1_000,
-            nestedField(row, "p99_ms", "median"));
+    boolean requiredRowPresent = false;
+    if (rowsObject instanceof List<?> rows) {
+      for (int index = 0; index < rows.size(); index++) {
+        Object row = rows.get(index);
+        String prefix = "comparison.rows[" + index + "].";
+        addAt(targets, prefix + "runs", "5", value -> equalsNumber(value, 5), field(row, "runs"));
+        if ("pessimistic".equals(field(row, "strategy"))
+            && "uniform".equals(field(row, "workload"))
+            && equalsNumber(field(row, "clients"), 32)) {
+          requiredRowPresent = true;
+          addAt(
+              targets,
+              prefix + "transfers_per_s.median",
+              ">= 100",
+              value -> number(value) && ((Number) value).doubleValue() >= 100,
+              nestedField(row, "transfers_per_s", "median"));
+          addAt(
+              targets,
+              prefix + "p99_ms.median",
+              "<= 1000",
+              value -> number(value) && ((Number) value).doubleValue() <= 1_000,
+              nestedField(row, "p99_ms", "median"));
+        }
       }
+    }
+    if (!requiredRowPresent) {
+      addAt(
+          targets,
+          "comparison.pessimistic.uniform.32",
+          "row present",
+          value -> Boolean.TRUE.equals(value),
+          false);
     }
   }
 
-  private static void addMutationTargets(Map<String, Object> results, List<Target> targets) {
-    if (results.containsKey("mutation")) {
+  private static void addMutationTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (presentSections.contains("mutation")) {
       add(
           results,
           targets,
@@ -301,9 +336,16 @@ public final class EvalMain {
     }
   }
 
-  private static void addCoverageTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("coverage")) {
+  private static void addCoverageTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("coverage")) {
       return;
+    }
+    if (get(results, "tests") == MISSING) {
+      addAt(targets, "tests", "section data", value -> value != MISSING, MISSING);
+    }
+    if (get(results, "coverage") == MISSING) {
+      addAt(targets, "coverage", "section data", value -> value != MISSING, MISSING);
     }
     Object packagesObject = get(results, "coverage.packages");
     if (!(packagesObject instanceof List<?> packages)) {
@@ -315,6 +357,7 @@ public final class EvalMain {
           MISSING);
       return;
     }
+    Set<String> modulesWithPackages = new LinkedHashSet<>();
     for (int index = 0; index < packages.size(); index++) {
       Object row = packages.get(index);
       Object module = field(row, "module");
@@ -323,8 +366,8 @@ public final class EvalMain {
         continue;
       }
       double minimum = moduleName.equals("ledger-core") ? 0.90 : 0.70;
-      if (moduleName.equals("ledger-core")
-          || List.of("platform", "ledger", "monitor", "auth", "extbank").contains(moduleName)) {
+      if (COVERAGE_MODULES.contains(moduleName)) {
+        modulesWithPackages.add(moduleName);
         if (packageText.equals("tally.ledger.failpoint")) {
           continue;
         }
@@ -336,10 +379,21 @@ public final class EvalMain {
             field(row, "line_coverage"));
       }
     }
+    for (String module : COVERAGE_MODULES) {
+      if (!modulesWithPackages.contains(module)) {
+        addAt(
+            targets,
+            "coverage." + module,
+            "package rows",
+            value -> Boolean.TRUE.equals(value),
+            false);
+      }
+    }
   }
 
-  private static void addPaymentTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("payments")) {
+  private static void addPaymentTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("payments")) {
       return;
     }
     add(results, targets, "payments.count", "2000", value -> equalsNumber(value, 2_000));
@@ -347,16 +401,18 @@ public final class EvalMain {
     add(results, targets, "payments.violations", "0", value -> equalsNumber(value, 0));
   }
 
-  private static void addEventTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("events")) {
+  private static void addEventTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("events")) {
       return;
     }
     add(results, targets, "events.runs", "40", value -> equalsNumber(value, 40));
     add(results, targets, "events.missing", "0", value -> equalsNumber(value, 0));
   }
 
-  private static void addReconTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("recon")) {
+  private static void addReconTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("recon")) {
       return;
     }
     add(results, targets, "recon.seeded", "300", value -> equalsNumber(value, 300));
@@ -365,8 +421,9 @@ public final class EvalMain {
     add(results, targets, "recon.false_breaks", "0", value -> equalsNumber(value, 0));
   }
 
-  private static void addMonitoringTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("monitoring")) {
+  private static void addMonitoringTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("monitoring")) {
       return;
     }
     Object rulesObject = get(results, "monitoring.rules");
@@ -389,8 +446,9 @@ public final class EvalMain {
     add(results, targets, "monitoring.double_delivery_diff", "0", value -> equalsNumber(value, 0));
   }
 
-  private static void addAuditTargets(Map<String, Object> results, List<Target> targets) {
-    if (!results.containsKey("audit")) {
+  private static void addAuditTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (!presentSections.contains("audit")) {
       return;
     }
     add(results, targets, "audit.changes", "1300", value -> equalsNumber(value, 1_300));
@@ -401,8 +459,9 @@ public final class EvalMain {
     add(results, targets, "audit.tamper_detected", "20", value -> equalsNumber(value, 20));
   }
 
-  private static void addBaselineTargets(Map<String, Object> results, List<Target> targets) {
-    if (results.containsKey("baseline")) {
+  private static void addBaselineTargets(
+      Map<String, Object> results, Set<String> presentSections, List<Target> targets) {
+    if (presentSections.contains("baseline")) {
       Object violations = get(results, "baseline.naive.violations");
       Object duplicates = get(results, "baseline.naive.double_posted_pairs");
       Object total =
@@ -487,7 +546,7 @@ public final class EvalMain {
     }
   }
 
-  private static String message(Exception exception) {
+  private static String message(Throwable exception) {
     return exception.getMessage() == null
         ? exception.getClass().getSimpleName()
         : exception.getMessage();
