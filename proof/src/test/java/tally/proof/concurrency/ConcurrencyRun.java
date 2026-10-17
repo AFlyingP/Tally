@@ -105,7 +105,25 @@ public final class ConcurrencyRun {
   }
 
   private void deposit(String key, UUID account, long amount) {
-    Http.Response response = client.deposit(key, account, amount);
+    Http.Response response = null;
+    for (int attempt = 0; attempt < 100; attempt++) {
+      response = client.deposit(key, account, amount);
+      if (response.status() == 201) {
+        break;
+      }
+      boolean retryExhausted =
+          response.status() == 503
+              && "RETRY_EXHAUSTED".equals(response.json().path("error").path("code").asString());
+      if (!retryExhausted || attempt == 99) {
+        assertThat(response.status()).as("deposit response: %s", response.body()).isEqualTo(201);
+      }
+      try {
+        Thread.sleep(100);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("deposit interrupted", e);
+      }
+    }
     assertThat(response.status()).as("deposit response: %s", response.body()).isEqualTo(201);
     depositedSum.add(amount);
   }
