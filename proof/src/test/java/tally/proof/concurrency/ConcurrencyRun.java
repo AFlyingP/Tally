@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
 import tally.ledger.check.Violation;
@@ -33,14 +34,14 @@ public final class ConcurrencyRun {
 
   private static final int POOL_SIZE = 1000;
   private static final int PAIR_SIZE = 100;
+  private static final long TOKEN_REFRESH_NANOS = 10 * 60 * 1_000_000_000L;
   private static final JsonMapper JSON = JsonMapper.builder().build();
 
   private final InProcessLedger ledger;
   private final Workload workload;
   private final boolean tolerateUnexpected;
   private final String runId = UUID.randomUUID().toString();
-  private final String token;
-  private final LedgerClient client;
+  private final AtomicReference<TokenSession> tokenSession;
   private final UUID[] accounts = new UUID[POOL_SIZE + PAIR_SIZE];
   private final ReentrantLock[] pairLocks = new ReentrantLock[PAIR_SIZE];
   private final LongAdder posted = new LongAdder();
@@ -56,8 +57,10 @@ public final class ConcurrencyRun {
     this.ledger = ledger;
     this.workload = workload;
     this.tolerateUnexpected = tolerateUnexpected;
-    token = ledger.issuer().token(Role.ADMIN);
-    client = new LedgerClient(ledger.url(), token);
+    String token = ledger.issuer().token(Role.ADMIN);
+    tokenSession =
+        new AtomicReference<>(
+            new TokenSession(System.nanoTime(), token, new LedgerClient(ledger.url(), token)));
     for (int index = 0; index < pairLocks.length; index++) {
       pairLocks[index] = new ReentrantLock();
     }
@@ -87,7 +90,7 @@ public final class ConcurrencyRun {
       int account = index;
       tasks.add(
           () -> {
-            Http.Response response = client.createAccount(0, true);
+            Http.Response response = currentSession().client().createAccount(0, true);
             assertThat(response.status())
                 .as("account creation response: %s", response.body())
                 .isEqualTo(201);
@@ -107,7 +110,7 @@ public final class ConcurrencyRun {
   private void deposit(String key, UUID account, long amount) {
     Http.Response response = null;
     for (int attempt = 0; attempt < 100; attempt++) {
-      response = client.deposit(key, account, amount);
+      response = currentSession().client().deposit(key, account, amount);
       if (response.status() == 201) {
         break;
       }
@@ -192,7 +195,7 @@ public final class ConcurrencyRun {
 
     try {
       UUID source = accounts[POOL_SIZE + index];
-      Http.Response response = client.balance(source);
+      Http.Response response = currentSession().client().balance(source);
       assertThat(response.status()).as("balance response: %s", response.body()).isEqualTo(200);
       long balance = response.json().get("balance").asLong();
       if (balance < 2) {
@@ -235,7 +238,13 @@ public final class ConcurrencyRun {
                 "description", runId));
     Http.Response response;
     try {
-      response = Http.post(ledger.url() + "/v1/transfers", token, body, "Idempotency-Key", key);
+      response =
+          Http.post(
+              ledger.url() + "/v1/transfers",
+              currentSession().token(),
+              body,
+              "Idempotency-Key",
+              key);
     } catch (IllegalStateException e) {
       if (!tolerateUnexpected || !(e.getCause() instanceof IOException)) {
         throw e;
@@ -263,6 +272,24 @@ public final class ConcurrencyRun {
     counter.increment();
     return outcome == Outcome.POSTED;
   }
+
+  private TokenSession currentSession() {
+    TokenSession current = tokenSession.get();
+    if (System.nanoTime() - current.issuedAtNanos() < TOKEN_REFRESH_NANOS) {
+      return current;
+    }
+    synchronized (tokenSession) {
+      current = tokenSession.get();
+      if (System.nanoTime() - current.issuedAtNanos() >= TOKEN_REFRESH_NANOS) {
+        String token = ledger.issuer().token(Role.ADMIN);
+        current = new TokenSession(System.nanoTime(), token, new LedgerClient(ledger.url(), token));
+        tokenSession.set(current);
+      }
+      return current;
+    }
+  }
+
+  private record TokenSession(long issuedAtNanos, String token, LedgerClient client) {}
 
   private static boolean awaitRequest(Future<Boolean> request) {
     try {
