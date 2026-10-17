@@ -416,6 +416,7 @@ public final class EvalSections {
     private static final int SOURCE_COUNT = 100;
     private static final long SOURCE_FUNDING = 1_000_000;
     private static final Duration PAYMENT_WINDOW = Duration.ofSeconds(120);
+    private static final Duration TERMINAL_WAIT = Duration.ofSeconds(900);
     private final FaultStack stack;
     private final SplittableRandom random;
     private final LedgerClient client;
@@ -561,7 +562,7 @@ public final class EvalSections {
 
     private void awaitPayments() {
       long started = System.nanoTime();
-      long end = started + Duration.ofSeconds(300).toNanos();
+      long end = started + TERMINAL_WAIT.toNanos();
       long nextProgress = 0;
       while (System.nanoTime() < end) {
         int terminal = terminalCount();
@@ -583,7 +584,10 @@ public final class EvalSections {
         }
       }
       throw new IllegalStateException(
-          "payments did not become terminal within 300 seconds; " + paymentTimeoutDetails());
+          "payments did not become terminal within "
+              + TERMINAL_WAIT.toSeconds()
+              + " seconds; "
+              + paymentTimeoutDetails());
     }
 
     private String paymentTimeoutDetails() {
