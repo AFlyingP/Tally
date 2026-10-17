@@ -34,6 +34,20 @@ fun Test.passProofProps() {
 
 val testSet = the<SourceSetContainer>()["test"]
 val evalExitCodeFile = rootDir.resolve("build/eval/exit_code")
+val evalClasspathDir = layout.buildDirectory.dir("eval-classpath")
+val runtimeClasspathEntries = testSet.runtimeClasspath.files.toList()
+val evalClasspathFiles = runtimeClasspathEntries.mapIndexed { index, entry ->
+    val entryDir = evalClasspathDir.get().dir(index.toString()).asFile
+    if (entry.isDirectory) entryDir else entryDir.resolve(entry.name)
+}
+
+val evalClasspath = tasks.register<Sync>("evalClasspath") {
+    inputs.files(testSet.runtimeClasspath)
+    runtimeClasspathEntries.forEachIndexed { index, entry ->
+        from(entry) { into(index.toString()) }
+    }
+    into(evalClasspathDir)
+}
 
 tasks.register<Test>("proofTest") {
     description = "Runs the proof suites at the selected size."
@@ -57,7 +71,7 @@ tasks.register<Test>("e2eTest") {
 tasks.register<JavaExec>("eval") {
     description = "Runs the evaluation and writes build/eval/results.json."
     group = "verification"
-    classpath = testSet.runtimeClasspath
+    classpath = files(evalClasspathFiles)
     mainClass = "tally.proof.eval.EvalMain"
     workingDir = rootDir
     maxHeapSize = "2g"
@@ -65,7 +79,7 @@ tasks.register<JavaExec>("eval") {
     systemProperty("proof.size", "eval")
     systemProperty("proof.root", rootDir.path)
     systemProperty("proof.seed", findProperty("proof.seed") ?: "20260101")
-    dependsOn("testClasses")
+    dependsOn("testClasses", evalClasspath)
     isIgnoreExitValue = true
     doLast {
         evalExitCodeFile.parentFile.mkdirs()
