@@ -364,6 +364,7 @@ public final class EvalSections {
             EnumSet.of(
                 FaultStack.Part.POSTGRES,
                 FaultStack.Part.EXTBANK,
+                FaultStack.Part.TOXIPROXY,
                 FaultStack.Part.LEDGER,
                 FaultStack.Part.WORKER))) {
       PaymentRun run = new PaymentRun(stack, seed);

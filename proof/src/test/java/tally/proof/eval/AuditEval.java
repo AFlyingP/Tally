@@ -35,6 +35,7 @@ public final class AuditEval {
             EnumSet.of(
                 FaultStack.Part.POSTGRES,
                 FaultStack.Part.EXTBANK,
+                FaultStack.Part.TOXIPROXY,
                 FaultStack.Part.LEDGER,
                 FaultStack.Part.WORKER))) {
       String token = stack.issuer().token(Role.ADMIN);
