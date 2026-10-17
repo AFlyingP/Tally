@@ -288,7 +288,8 @@ public final class EvalSections {
             "pessimistic",
             EnumSet.of(
                 FaultStack.Part.POSTGRES, FaultStack.Part.TOXIPROXY, FaultStack.Part.LEDGER))) {
-      LedgerClient client = new LedgerClient(stack.ledgerUrl(), stack.issuer().token(Role.ADMIN));
+      String token = stack.issuer().token(Role.ADMIN);
+      LedgerClient client = new LedgerClient(stack.ledgerUrl(), token);
       Http.Response created = client.createAccount(0, true);
       if (created.status() != 201) {
         throw new IllegalStateException("recovery account creation failed: " + created.status());
@@ -298,12 +299,12 @@ public final class EvalSections {
         stack.kill("ledger");
         long started = System.nanoTime();
         stack.startNoWait("ledger");
-        apiTimes.add(awaitAccount(stack, accountId, started));
+        apiTimes.add(awaitAccount(stack, accountId, token, started));
       }
       for (int run = 0; run < 20; run++) {
         long started = System.nanoTime();
         stack.restart("postgres", 10);
-        dbTimes.add(awaitAccount(stack, accountId, started));
+        dbTimes.add(awaitAccount(stack, accountId, token, started));
       }
     }
     return Map.of(
@@ -333,13 +334,15 @@ public final class EvalSections {
     return result;
   }
 
-  private static double awaitAccount(FaultStack stack, String accountId, long started) {
+  private static double awaitAccount(
+      FaultStack stack, String accountId, String token, long started) {
     HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(1)).build();
     long deadline = started + Duration.ofSeconds(120).toNanos();
     try {
       while (System.nanoTime() < deadline) {
         HttpRequest request =
             HttpRequest.newBuilder(URI.create(stack.ledgerUrl() + "/v1/accounts/" + accountId))
+                .header("Authorization", "Bearer " + token)
                 .timeout(Duration.ofSeconds(1))
                 .GET()
                 .build();
