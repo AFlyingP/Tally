@@ -73,6 +73,7 @@ subprojects {
     }
 
     tasks.named<JacocoReport>("jacocoTestReport") {
+        mustRunAfter("test", integrationTest)
         executionData(fileTree(layout.buildDirectory).include("jacoco/*.exec"))
         reports { xml.required = true }
     }
