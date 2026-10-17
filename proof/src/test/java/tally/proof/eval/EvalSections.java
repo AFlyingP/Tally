@@ -724,7 +724,8 @@ public final class EvalSections {
 
   private static void runGradle(Path root, List<String> arguments, int timeoutMinutes) {
     List<String> command = new ArrayList<>();
-    command.add(System.getProperty("os.name").startsWith("Windows") ? "gradlew.bat" : "./gradlew");
+    boolean isWindows = System.getProperty("os.name").startsWith("Windows");
+    command.add(root.resolve(isWindows ? "gradlew.bat" : "gradlew").toAbsolutePath().toString());
     command.add("--project-cache-dir");
     command.add("build/eval/gradle-cache");
     command.addAll(arguments);
