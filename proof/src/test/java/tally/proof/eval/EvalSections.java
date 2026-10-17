@@ -180,16 +180,22 @@ public final class EvalSections {
     List<Scenario> scenarios = Arrays.asList(Scenario.values());
     Map<String, FaultStack> stacks = new LinkedHashMap<>();
     try {
-      for (String strategy : STRATEGIES) {
-        stacks.put(strategy, FaultStack.start(strategy, EnumSet.allOf(FaultStack.Part.class)));
-      }
       Map<String, Object> results = new LinkedHashMap<>();
       if (parallelism == 1) {
         for (String strategy : STRATEGIES) {
-          results.put(
-              strategy, faultStrategy(stacks.get(strategy), scenarios, strategy, sizes, seed));
+          FaultStack stack = FaultStack.start(strategy, EnumSet.allOf(FaultStack.Part.class));
+          stacks.put(strategy, stack);
+          try {
+            results.put(strategy, faultStrategy(stack, scenarios, strategy, sizes, seed));
+          } finally {
+            stack.close();
+            stacks.remove(strategy);
+          }
         }
       } else {
+        for (String strategy : STRATEGIES) {
+          stacks.put(strategy, FaultStack.start(strategy, EnumSet.allOf(FaultStack.Part.class)));
+        }
         AtomicInteger threadNumber = new AtomicInteger();
         try (ExecutorService executor =
             Executors.newFixedThreadPool(
@@ -257,10 +263,25 @@ public final class EvalSections {
                 FaultStack.Part.WORKER))) {
       int missing = 0;
       int duplicates = 0;
+      int runs = 0;
       for (Scenario scenario : List.of(Scenario.RELAY_KILL, Scenario.BROKER_RESTART)) {
         for (int run = 0; run < sizes.faultRuns(); run++) {
-          FaultResult result =
-              FaultSuiteTest.runScenario(stack, scenario, "pessimistic", sizes, seed + run);
+          runs++;
+          FaultResult result;
+          try {
+            result = FaultSuiteTest.runScenario(stack, scenario, "pessimistic", sizes, seed + run);
+          } catch (AssertionError | IllegalStateException failure) {
+            missing++;
+            System.out.println(
+                "scenario="
+                    + scenario.id()
+                    + " strategy=pessimistic run="
+                    + (run + 1)
+                    + " failed: "
+                    + failure.getMessage());
+            continue;
+          }
+          RunCounts counts = countRun(result, scenario);
           System.out.println(
               "scenario="
                   + scenario.id()
@@ -273,14 +294,13 @@ public final class EvalSections {
                   + " duplicates="
                   + result.duplicatePostings()
                   + " violations="
-                  + result.violations().size());
-          missing += result.missingEvents() == null ? 0 : result.missingEvents();
-          duplicates += result.duplicateEvents() == null ? 0 : result.duplicateEvents();
+                  + counts.violations()
+                  + (counts.reasons().isEmpty() ? "" : " reasons=" + counts.reasons()));
+          missing += counts.missing();
+          duplicates += counts.duplicates();
         }
       }
-      return Map.of(
-          "events",
-          Map.of("runs", sizes.faultRuns() * 2, "missing", missing, "duplicates", duplicates));
+      return Map.of("events", Map.of("runs", runs, "missing", missing, "duplicates", duplicates));
     }
   }
 
@@ -708,8 +728,25 @@ public final class EvalSections {
       int unresolved = 0;
       int scenarioRuns = 0;
       for (int run = 0; run < sizes.faultRuns(); run++) {
-        FaultResult result =
-            FaultSuiteTest.runScenario(stack, scenario, strategy, sizes, seed + run);
+        scenarioRuns++;
+        runs++;
+        FaultResult result;
+        try {
+          result = FaultSuiteTest.runScenario(stack, scenario, strategy, sizes, seed + run);
+        } catch (AssertionError | IllegalStateException failure) {
+          System.out.println(
+              "scenario="
+                  + scenario.id()
+                  + " strategy="
+                  + strategy
+                  + " run="
+                  + (run + 1)
+                  + " failed: "
+                  + failure.getMessage());
+          scenarioViolations++;
+          continue;
+        }
+        RunCounts counts = countRun(result, scenario);
         System.out.println(
             "scenario="
                 + scenario.id()
@@ -724,13 +761,12 @@ public final class EvalSections {
                 + " duplicates="
                 + result.duplicatePostings()
                 + " violations="
-                + result.violations().size()
+                + counts.violations()
                 + " unresolved="
-                + result.unresolved());
-        runs++;
-        scenarioRuns++;
+                + result.unresolved()
+                + (counts.reasons().isEmpty() ? "" : " reasons=" + counts.reasons()));
         scenarioDuplicates += result.duplicatePostings();
-        scenarioViolations += result.violations().size();
+        scenarioViolations += counts.violations();
         unresolved += result.unresolved();
         if (result.duplicateScheduled() != null) {
           scenarioDuplicateScheduled += result.duplicateScheduled();
@@ -758,6 +794,92 @@ public final class EvalSections {
     values.put("scenarios", scenarioResults);
     return values;
   }
+
+  private static RunCounts countRun(FaultResult result, Scenario scenario) {
+    int violations = result.violations().size();
+    int missing = 0;
+    int duplicates = 0;
+    List<String> reasons = new ArrayList<>();
+    boolean eventMeasurementsRequired =
+        scenario == Scenario.RELAY_KILL || scenario == Scenario.BROKER_RESTART;
+    if (result.missingPostings() > 0) {
+      violations++;
+      reasons.add("missing_postings=" + result.missingPostings());
+    }
+    if (scenario != Scenario.MONITOR_KILL && result.balanceSum() != 5_000_000L) {
+      violations++;
+      reasons.add("balance_sum=" + result.balanceSum());
+    }
+    if (result.missingEvents() != null) {
+      missing += result.missingEvents();
+      if (result.missingEvents() > 0) {
+        violations++;
+        reasons.add("missing_events=" + result.missingEvents());
+      }
+    } else if (eventMeasurementsRequired) {
+      reasons.add("missing_events=unmeasured");
+    }
+    if (result.duplicateEvents() != null) {
+      duplicates += result.duplicateEvents();
+      if (result.duplicateEvents() > 0) {
+        reasons.add("duplicate_events=" + result.duplicateEvents());
+      }
+    } else if (eventMeasurementsRequired) {
+      reasons.add("duplicate_events=unmeasured");
+    }
+    if (eventMeasurementsRequired
+        && (result.missingEvents() == null || result.duplicateEvents() == null)) {
+      violations++;
+      missing++;
+    }
+    if (result.createdOrLost() != null && result.createdOrLost() != 0) {
+      violations++;
+      reasons.add("created_or_lost=" + result.createdOrLost());
+    }
+    switch (scenario) {
+      case SCHEDULER_KILL -> {
+        if (result.duplicateScheduled() == null) {
+          violations++;
+          reasons.add("duplicate_scheduled=unmeasured");
+        }
+      }
+      case RELAY_KILL, BROKER_RESTART -> {
+        // Required event measurements are counted above.
+      }
+      case EXTBANK_FAULTS, ORCHESTRATOR_KILL -> {
+        if (result.createdOrLost() == null) {
+          violations++;
+          reasons.add("created_or_lost=unmeasured");
+        }
+      }
+      case MONITOR_KILL -> {
+        if (result.monitor() == null) {
+          violations++;
+          reasons.add("monitor=unmeasured");
+        } else {
+          for (String key : List.of("missing_alerts", "extra_alerts", "duplicate_alerts")) {
+            Integer count = result.monitor().get(key);
+            if (count == null) {
+              violations++;
+              reasons.add(key + "=unmeasured");
+            } else if (count != 0) {
+              violations++;
+              reasons.add(key + "=" + count);
+            }
+          }
+        }
+      }
+      default -> {}
+    }
+    if (scenario == Scenario.SCHEDULER_KILL
+        && result.duplicateScheduled() != null
+        && result.duplicateScheduled() > 0) {
+      reasons.add("duplicate_scheduled=" + result.duplicateScheduled());
+    }
+    return new RunCounts(violations, missing, duplicates, String.join(",", reasons));
+  }
+
+  private record RunCounts(int violations, int missing, int duplicates, String reasons) {}
 
   private static void runGradle(Path root, List<String> arguments, int timeoutMinutes) {
     List<String> command = new ArrayList<>();
