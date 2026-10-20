@@ -178,7 +178,14 @@ public final class EvalSections {
       parallelism = memoryMb >= 20_000 ? 3 : 1;
     }
     System.out.println("faults parallel=" + parallelism + " docker_memory_mb=" + memoryMb);
-    List<Scenario> scenarios = Arrays.asList(Scenario.values());
+    Set<Integer> only = scenarioFilter(System.getenv("TALLY_EVAL_FAULT_SCENARIOS"));
+    List<Scenario> scenarios =
+        Arrays.stream(Scenario.values())
+            .filter(scenario -> only.isEmpty() || only.contains(scenario.id()))
+            .toList();
+    if (!only.isEmpty()) {
+      System.out.println("faults scenarios=" + only + " merged into the existing section");
+    }
     Map<String, FaultStack> stacks = new LinkedHashMap<>();
     try {
       Map<String, Object> results = new LinkedHashMap<>();
@@ -228,6 +235,13 @@ public final class EvalSections {
             throw failure;
           }
         }
+      }
+      if (!only.isEmpty()) {
+        Path sectionsDir =
+            Path.of(System.getProperty("proof.root", "..")).resolve("build/eval/sections");
+        return Map.of(
+            "faults",
+            mergeFaults(asMap(Results.readSection(sectionsDir, "faults").get("faults")), results));
       }
       return Map.of("faults", results);
     } finally {
@@ -306,7 +320,7 @@ public final class EvalSections {
   }
 
   public static Map<String, Object> comparison(Sizes sizes, long seed) {
-    return Map.of("comparison", LoadComparison.run(sizes, seed));
+    return Map.of("comparison", Map.of("rows", LoadComparison.run(sizes, seed)));
   }
 
   public static Map<String, Object> mutation() {
@@ -855,7 +869,75 @@ public final class EvalSections {
     return values;
   }
 
-  private static RunCounts countRun(FaultResult result, Scenario scenario) {
+  static Set<Integer> scenarioFilter(String value) {
+    Set<Integer> ids = new LinkedHashSet<>();
+    if (value == null || value.isBlank()) {
+      return ids;
+    }
+    Set<Integer> known = new LinkedHashSet<>();
+    for (Scenario scenario : Scenario.values()) {
+      known.add(scenario.id());
+    }
+    for (String part : value.split(",")) {
+      int id = Integer.parseInt(part.trim());
+      if (!known.contains(id)) {
+        throw new IllegalArgumentException("TALLY_EVAL_FAULT_SCENARIOS: unknown scenario " + id);
+      }
+      ids.add(id);
+    }
+    return ids;
+  }
+
+  /** Replaces the rerun scenarios of each strategy and adjusts the strategy totals. */
+  static Map<String, Object> mergeFaults(Map<String, Object> existing, Map<String, Object> rerun) {
+    Map<String, Object> merged = new LinkedHashMap<>();
+    for (Map.Entry<String, Object> strategy : existing.entrySet()) {
+      Map<String, Object> old = asMap(strategy.getValue());
+      Object fresh = rerun.get(strategy.getKey());
+      if (fresh == null) {
+        merged.put(strategy.getKey(), old);
+        continue;
+      }
+      Map<Integer, Map<String, Object>> replacements = new LinkedHashMap<>();
+      for (Object entry : (List<?>) asMap(fresh).get("scenarios")) {
+        Map<String, Object> scenario = asMap(entry);
+        replacements.put(((Number) scenario.get("id")).intValue(), scenario);
+      }
+      Map<String, Object> values = new LinkedHashMap<>(old);
+      List<Object> scenarios = new ArrayList<>();
+      for (Object entry : (List<?>) old.get("scenarios")) {
+        Map<String, Object> before = asMap(entry);
+        Map<String, Object> after = replacements.remove(((Number) before.get("id")).intValue());
+        if (after == null) {
+          scenarios.add(before);
+          continue;
+        }
+        for (String total :
+            List.of("runs", "duplicate_postings", "duplicate_scheduled", "violations")) {
+          values.put(total, count(values, total) - count(before, total) + count(after, total));
+        }
+        scenarios.add(after);
+      }
+      if (!replacements.isEmpty()) {
+        throw new IllegalStateException(
+            "rerun scenarios " + replacements.keySet() + " missing from the existing section");
+      }
+      values.put("scenarios", scenarios);
+      merged.put(strategy.getKey(), values);
+    }
+    return merged;
+  }
+
+  private static int count(Map<String, Object> values, String key) {
+    return values.get(key) instanceof Number number ? number.intValue() : 0;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> asMap(Object value) {
+    return (Map<String, Object>) value;
+  }
+
+  static RunCounts countRun(FaultResult result, Scenario scenario) {
     int violations = result.violations().size();
     int missing = 0;
     int duplicates = 0;
@@ -906,10 +988,24 @@ public final class EvalSections {
       case RELAY_KILL, BROKER_RESTART -> {
         // Required event measurements are counted above.
       }
-      case EXTBANK_FAULTS, ORCHESTRATOR_KILL -> {
+      case EXTBANK_FAULTS -> {
         if (result.createdOrLost() == null) {
           violations++;
           reasons.add("created_or_lost=unmeasured");
+        }
+      }
+      case ORCHESTRATOR_KILL -> {
+        if (result.paymentStates() == null) {
+          violations++;
+          reasons.add("payment_states=unmeasured");
+        } else {
+          Map<String, Integer> nonSettled = new TreeMap<>(result.paymentStates());
+          nonSettled.remove("SETTLED");
+          nonSettled.values().removeIf(count -> count == 0);
+          if (!nonSettled.isEmpty()) {
+            violations++;
+            reasons.add("payment_states=" + nonSettled);
+          }
         }
       }
       case MONITOR_KILL -> {
@@ -939,7 +1035,7 @@ public final class EvalSections {
     return new RunCounts(violations, missing, duplicates, String.join(",", reasons));
   }
 
-  private record RunCounts(int violations, int missing, int duplicates, String reasons) {}
+  record RunCounts(int violations, int missing, int duplicates, String reasons) {}
 
   private static void runGradle(Path root, List<String> arguments, int timeoutMinutes) {
     List<String> command = new ArrayList<>();
