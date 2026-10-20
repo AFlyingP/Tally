@@ -98,3 +98,15 @@ tasks.register<JavaExec>("demo") {
     systemProperty("proof.root", rootDir.path)
     dependsOn("testClasses")
 }
+
+tasks.register<JavaExec>("render") {
+    description = "Renders evaluation results into the documentation."
+    group = "verification"
+    classpath = testSet.runtimeClasspath
+    mainClass = "tally.proof.eval.ResultsRenderer"
+    workingDir = rootDir
+    maxHeapSize = "2g"
+    args = findProperty("cmdArgs")?.toString()?.split(" ")?.filter { it.isNotBlank() } ?: emptyList()
+    systemProperty("proof.root", rootDir.path)
+    dependsOn("testClasses")
+}
