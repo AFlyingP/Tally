@@ -86,3 +86,15 @@ tasks.register<JavaExec>("eval") {
         evalExitCodeFile.writeText("${executionResult.get().exitValue}\n")
     }
 }
+
+tasks.register<JavaExec>("demo") {
+    description = "Runs the 12-step demo against the running stack."
+    group = "verification"
+    classpath = testSet.runtimeClasspath
+    mainClass = "tally.proof.demo.Demo"
+    workingDir = rootDir
+    maxHeapSize = "2g"
+    args = findProperty("cmdArgs")?.toString()?.split(" ")?.filter { it.isNotBlank() } ?: emptyList()
+    systemProperty("proof.root", rootDir.path)
+    dependsOn("testClasses")
+}

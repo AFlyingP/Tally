@@ -53,15 +53,20 @@ public final class Http {
 
   static Response send(HttpRequest.Builder request) {
     try {
-      HttpResponse<String> response =
-          CLIENT.send(request.timeout(TIMEOUT).build(), HttpResponse.BodyHandlers.ofString());
-      return new Response(response.statusCode(), response.body(), response.headers().map());
+      return send(request, TIMEOUT);
     } catch (IOException e) {
       throw new IllegalStateException(e);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IllegalStateException(e);
     }
+  }
+
+  public static Response send(HttpRequest.Builder request, Duration timeout)
+      throws IOException, InterruptedException {
+    HttpResponse<String> response =
+        CLIENT.send(request.timeout(timeout).build(), HttpResponse.BodyHandlers.ofString());
+    return new Response(response.statusCode(), response.body(), response.headers().map());
   }
 
   private static HttpRequest.Builder request(String url, String bearerOrNull) {
