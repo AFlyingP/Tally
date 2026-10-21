@@ -297,7 +297,7 @@ public final class Demo {
     expect(6, submitted.status() == 202, "payment submission failed: " + submitted.body());
     JsonNode initial = submitted.json();
     String id = initial.get("id").asString();
-    JsonNode payment = pollPayment(id, Duration.ofSeconds(60), 6, 100);
+    JsonNode payment = pollPayment(id, Duration.ofSeconds(60), 6, 200);
     expect(
         6,
         payment.get("state").asString().equals("REJECTED_COMPENSATED"),
